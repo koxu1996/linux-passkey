@@ -20,7 +20,8 @@ fn hex(b: &[u8]) -> String {
 
 fn open(data_dir: PathBuf, writer: bool) -> Result<AppEnv> {
     // No uhid device and no prompts: the Env is only used for its store.
-    AppEnv::new(UhidConnection::detached(), String::new(), data_dir, writer)
+    let no_prompts = crate::presence::UserCheck { pinentry_bin: String::new(), fprintd_verify: None };
+    AppEnv::new(UhidConnection::detached(), no_prompts, data_dir, writer)
 }
 
 fn credentials(env: &mut AppEnv) -> Result<Vec<PublicKeyCredentialSource>> {

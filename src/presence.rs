@@ -1,4 +1,5 @@
-//! User presence, via a pinentry confirmation.
+//! User presence, via a pinentry confirmation (plus, with
+//! `LINUX_PASSKEY_UV=fprintd`, a fingerprint check after it; see [`UserCheck`]).
 //!
 //! OpenSK calls this only when user *verification* was NOT performed
 //! (`has_valid_up` treats a performed UV as also satisfying presence). So on a
@@ -17,15 +18,44 @@ use crate::request::{self, Prompt};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
+/// How the user approves a request: a pinentry dialog naming the site (and
+/// account), then optionally a fingerprint check. Shared by user presence and
+/// the fingerprint-backed user verification, so every path asks the same way.
+#[derive(Clone)]
+pub struct UserCheck {
+    pub pinentry_bin: String,
+    /// `fprintd-verify` binary when fingerprints are on (`LINUX_PASSKEY_UV=fprintd`).
+    pub fprintd_verify: Option<String>,
+}
+
+impl UserCheck {
+    /// Dialog first; the finger only after a confirm, and only for requests that
+    /// act on a credential (see [`request::wants_fingerprint`]).
+    pub fn confirm(&self, req: Option<&request::Request>) -> bool {
+        let mut prompt = Prompt::for_request(req);
+        let finger = self.fprintd_verify.as_deref().filter(|_| request::wants_fingerprint(req));
+        if finger.is_some() {
+            prompt.description.push_str("\n\nAfter confirming, touch the fingerprint sensor.");
+        }
+        if !pinentry_confirm(&self.pinentry_bin, &prompt) {
+            return false;
+        }
+        match finger {
+            Some(bin) => crate::fprintd::verify(bin),
+            None => true,
+        }
+    }
+}
+
 pub struct PinentryPresence {
-    pinentry_bin: String,
+    check: UserCheck,
     pending: Option<Receiver<bool>>,
 }
 
 impl PinentryPresence {
-    pub fn new(pinentry_bin: String) -> Self {
+    pub fn new(check: UserCheck) -> Self {
         PinentryPresence {
-            pinentry_bin,
+            check,
             pending: None,
         }
     }
@@ -41,10 +71,10 @@ impl UserPresence for PinentryPresence {
             self.pending = Some(rx);
             return;
         }
-        let bin = self.pinentry_bin.clone();
-        let prompt = Prompt::for_request(request::current().as_ref());
+        let check = self.check.clone();
+        let req = request::current();
         std::thread::spawn(move || {
-            let _ = tx.send(pinentry_confirm(&bin, &prompt));
+            let _ = tx.send(check.confirm(req.as_ref()));
         });
         self.pending = Some(rx);
     }

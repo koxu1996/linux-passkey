@@ -10,6 +10,7 @@ mod clock;
 mod crypto;
 mod env;
 mod fingerprint;
+mod fprintd;
 mod presence;
 mod request;
 mod rng;
@@ -47,7 +48,9 @@ ENVIRONMENT:
   LINUX_PASSKEY_TCTI       TPM (default device:/dev/tpmrm0)
   LINUX_PASSKEY_PINENTRY   pinentry binary for the confirm dialog
   LINUX_PASSKEY_BACKEND    hardware behind the keys: tpm (default) or sep
-  LINUX_PASSKEY_SEP_DEVICE Secure Enclave device (default /dev/sep-bio)";
+  LINUX_PASSKEY_SEP_DEVICE Secure Enclave device (default /dev/sep-bio)
+  LINUX_PASSKEY_UV         approval: pinentry (dialog, default) or fprintd (dialog, then finger)
+  LINUX_PASSKEY_FPRINTD_VERIFY  fprintd-verify binary (default fprintd-verify)";
 
 /// `LINUX_PASSKEY_<name>`, falling back to the pre-rename `TPM2_PASSKEY_<name>`.
 fn env_var(name: &str) -> Option<String> {
@@ -89,6 +92,13 @@ fn main() -> Result<()> {
         .init();
 
     let pinentry_bin = env_var("PINENTRY").unwrap_or_else(|| "pinentry".to_string());
+    // How requests are approved: the pinentry dialog, then (fprintd) the finger.
+    let fprintd_verify = match env_var("UV").as_deref().unwrap_or("pinentry") {
+        "pinentry" => None,
+        "fprintd" => Some(env_var("FPRINTD_VERIFY").unwrap_or_else(|| "fprintd-verify".to_string())),
+        other => anyhow::bail!("unknown LINUX_PASSKEY_UV '{other}' (supported: pinentry, fprintd)"),
+    };
+    let check = presence::UserCheck { pinentry_bin, fprintd_verify };
     let tcti = env_var("TCTI").unwrap_or_else(|| "device:/dev/tpmrm0".to_string());
     let data_dir = match env_var("DATA_DIR") {
         Some(dir) => std::path::PathBuf::from(dir),
@@ -145,7 +155,7 @@ fn main() -> Result<()> {
     }
     // Take the store lock before creating the device, so a second daemon
     // fails cleanly instead of fighting over the same store.
-    let env = AppEnv::new(UhidConnection::detached(), pinentry_bin, data_dir, true)?;
+    let env = AppEnv::new(UhidConnection::detached(), check, data_dir, true)?;
     let env = env.with_hid(UhidConnection::create()?);
     tracing::info!("uhid FIDO2 device created; waiting for the host");
 

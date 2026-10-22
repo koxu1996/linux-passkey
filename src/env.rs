@@ -41,14 +41,14 @@ impl AppEnv {
     /// read-only CLI use alongside a running daemon (`list`).
     pub fn new(
         hid: UhidConnection,
-        pinentry_bin: String,
+        check: crate::presence::UserCheck,
         data_dir: PathBuf,
         writer: bool,
     ) -> anyhow::Result<Self> {
         Ok(AppEnv {
             rng: AppRng::new(),
-            user_presence: PinentryPresence::new(pinentry_bin.clone()),
-            fingerprint: PinentryFingerprint::new(pinentry_bin),
+            user_presence: PinentryPresence::new(check.clone()),
+            fingerprint: PinentryFingerprint::new(check),
             hid,
             clock: RealClock,
             // 300 discoverable credentials: the whole CREDENTIALS key range

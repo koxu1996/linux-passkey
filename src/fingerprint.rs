@@ -1,7 +1,8 @@
-//! Built-in user verification, backed by a pinentry confirmation.
+//! Built-in user verification, backed by a pinentry confirmation (and, with
+//! `LINUX_PASSKEY_UV=fprintd`, a real fingerprint check after it).
 //!
 //! We present OpenSK with a "fingerprint sensor" whose single sample is a
-//! pinentry Confirm/Deny click. With one template enrolled, the authenticator
+//! pinentry Confirm/Deny click (then the finger, when enabled). With one template enrolled, the authenticator
 //! advertises `uv:true`, so the browser performs built-in UV (this prompt)
 //! instead of asking for a clientPIN. `check_fingerprint` is polled in a loop
 //! by OpenSK (Timeout = keep waiting + keepalive), matching our poll model.
@@ -18,14 +19,14 @@ use std::time::Duration;
 pub const TEMPLATE_ID: &[u8] = b"tpm2-passkey-uv";
 
 pub struct PinentryFingerprint {
-    pinentry_bin: String,
+    check: crate::presence::UserCheck,
     pending: Option<Receiver<bool>>,
 }
 
 impl PinentryFingerprint {
-    pub fn new(pinentry_bin: String) -> Self {
+    pub fn new(check: crate::presence::UserCheck) -> Self {
         PinentryFingerprint {
-            pinentry_bin,
+            check,
             pending: None,
         }
     }
@@ -54,10 +55,10 @@ impl Fingerprint for PinentryFingerprint {
 
     fn check_fingerprint_init(&mut self) -> CtapResult<()> {
         let (tx, rx) = mpsc::channel();
-        let bin = self.pinentry_bin.clone();
-        let prompt = crate::request::Prompt::for_request(crate::request::current().as_ref());
+        let check = self.check.clone();
+        let req = crate::request::current();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::presence::pinentry_confirm(&bin, &prompt));
+            let _ = tx.send(check.confirm(req.as_ref()));
         });
         self.pending = Some(rx);
         Ok(())

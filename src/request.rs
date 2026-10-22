@@ -273,6 +273,16 @@ fn clean(s: &str) -> String {
 }
 
 /// Dialog wording for a request: (title, description, OK-button label).
+/// Whether a confirmed request also needs the fingerprint (when enabled): yes
+/// for anything that creates, uses or deletes credentials; no for the
+/// informational "already registered" answer and the browser's key selection.
+pub fn wants_fingerprint(req: Option<&Request>) -> bool {
+    !matches!(
+        req,
+        Some(Request::Register { existing: true, .. }) | Some(Request::Select)
+    )
+}
+
 pub struct Prompt {
     pub title: String,
     pub description: String,
@@ -328,7 +338,7 @@ impl Prompt {
             ),
             Some(Request::Select) => p(
                 "linux-passkey",
-                "Use this TPM passkey authenticator?".to_string(),
+                "Use this passkey authenticator?".to_string(),
                 "Select",
             ),
             Some(Request::U2fRegister) => p(
@@ -353,6 +363,24 @@ impl Prompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fingerprint_only_for_credential_operations() {
+        let reg = |existing| Request::Register {
+            rp: "example.com".into(),
+            user: None,
+            exclude: vec![],
+            has_uv: true,
+            existing,
+        };
+        assert!(wants_fingerprint(Some(&reg(false))));
+        assert!(wants_fingerprint(Some(&Request::SignIn { rp: "example.com".into() })));
+        assert!(wants_fingerprint(Some(&Request::Reset)));
+        assert!(wants_fingerprint(Some(&Request::U2fSignIn)));
+        assert!(wants_fingerprint(None));
+        assert!(!wants_fingerprint(Some(&reg(true))), "already registered is informational");
+        assert!(!wants_fingerprint(Some(&Request::Select)), "key selection is not an approval");
+    }
     use sk_cbor::{cbor_array, cbor_map};
 
     // Tests share the process-wide CURRENT slot.
