@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Passkey platform shim",
+  "version": "0.1",
+  "description": "Lets Google create a passkey on a USB/virtual FIDO2 key (tpm2-passkey) on Linux: reports a platform authenticator as available and strips platform-only constraints from navigator.credentials.create().",
+  "content_scripts": [
+    {
+      "matches": ["https://*.google.com/*"],
+      "js": ["shim.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ]
+}
