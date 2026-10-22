@@ -13,6 +13,7 @@ mod fingerprint;
 mod presence;
 mod request;
 mod rng;
+mod sep;
 mod store;
 mod tpm;
 mod uhid;
@@ -45,7 +46,8 @@ ENVIRONMENT:
   LINUX_PASSKEY_DATA_DIR   store dir (default ~/.local/share/linux-passkey)
   LINUX_PASSKEY_TCTI       TPM (default device:/dev/tpmrm0)
   LINUX_PASSKEY_PINENTRY   pinentry binary for the confirm dialog
-  LINUX_PASSKEY_BACKEND    hardware behind the keys: tpm (default)";
+  LINUX_PASSKEY_BACKEND    hardware behind the keys: tpm (default) or sep
+  LINUX_PASSKEY_SEP_DEVICE Secure Enclave device (default /dev/sep-bio)";
 
 /// `LINUX_PASSKEY_<name>`, falling back to the pre-rename `TPM2_PASSKEY_<name>`.
 fn env_var(name: &str) -> Option<String> {
@@ -109,14 +111,19 @@ fn main() -> Result<()> {
         anyhow::bail!("unknown command '{command}'\n\n{USAGE}");
     }
 
-    // The hardware behind the keys and the store. Only "tpm" so far.
+    // The hardware behind the keys and the store.
     let backend_name = env_var("BACKEND").unwrap_or_else(|| "tpm".into());
     match backend_name.as_str() {
         "tpm" => {
             tpm::init(&tcti)?;
             backend::init(Box::new(tpm::TpmBackend))?;
         }
-        other => anyhow::bail!("unknown LINUX_PASSKEY_BACKEND '{other}' (supported: tpm)"),
+        "sep" => {
+            let device = env_var("SEP_DEVICE").unwrap_or_else(|| "/dev/sep-bio".into());
+            sep::init(&device)?;
+            backend::init(Box::new(sep::SepBackend))?;
+        }
+        other => anyhow::bail!("unknown LINUX_PASSKEY_BACKEND '{other}' (supported: tpm, sep)"),
     }
     match command {
         "list" => {

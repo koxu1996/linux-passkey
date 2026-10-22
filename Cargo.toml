@@ -23,6 +23,8 @@ tss-esapi-sys = "=0.6.0-alpha.1"
 sha2 = "0.10"
 # AES-256-GCM to encrypt the on-disk credential store (key is TPM-sealed).
 aes-gcm = "0.10"
+# Raw syscalls for the Secure Enclave backend (ioctl, keyrings, AF_ALG).
+libc = "0.2"
 # Randomness, logging, errors.
 rand = "0.8"
 tracing = "0.1"

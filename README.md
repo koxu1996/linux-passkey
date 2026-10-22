@@ -99,7 +99,8 @@ LINUX_PASSKEY_PINENTRY=$(command -v pinentry-qt) ./result/bin/linux-passkey
 |---|---|---|
 | `LINUX_PASSKEY_PINENTRY` | `pinentry` | pinentry binary for the dialog (`pinentry-qt` works under Hyprland; `pinentry-gnome3` silently fails there) |
 | `LINUX_PASSKEY_DATA_DIR` | `~/.local/share/linux-passkey` | credential store |
-| `LINUX_PASSKEY_BACKEND` | `tpm` | hardware behind the keys and the store (only `tpm` so far) |
+| `LINUX_PASSKEY_BACKEND` | `tpm` | hardware behind the keys and the store: `tpm`, or `sep` (Apple Secure Enclave, see below) |
+| `LINUX_PASSKEY_SEP_DEVICE` | `/dev/sep-bio` | Secure Enclave device (`sep` backend) |
 | `LINUX_PASSKEY_TCTI` | `device:/dev/tpmrm0` | TPM; use `swtpm:…` for a software TPM |
 | `RUST_LOG` | `info` | `linux_passkey::request=debug` logs every request (op, site, user, UV) |
 
@@ -130,6 +131,20 @@ It stays inert until `/dev/tpmrm0` exists.
 > **Don't run `tpm-fido` alongside it.** The browser sends every request to
 > every key, so you get two dialogs, and tpm-fido (U2F-only) is what triggers
 > "your device can't be used with this site".
+
+## Apple Silicon (Secure Enclave backend)
+
+`LINUX_PASSKEY_BACKEND=sep` keeps the credential keys in the Mac's Secure
+Enclave instead of a TPM: each passkey gets its own enclave key, created and
+used inside the enclave; only the enclave-wrapped blob (258 bytes) is stored.
+The store key is a kernel trusted key sealed by the enclave, and the store is
+encrypted inside the kernel, so the AES key never enters the daemon.
+
+Requires the aurora-silicon `apple_sep` driver (Touch ID working, xART writes
+on, `trusted.source=applesep`) plus the `SEP_BIO_KEY_CREATE`/`SEP_BIO_KEY_SIGN`
+ioctls, currently a patch on top of it:
+[apple-sep-key-ioctls.patch](https://gitlab.com/andrzej1_1/nixos-config/-/blob/master/hosts/nixAir/touchid/apple-sep-key-ioctls.patch).
+Tested on a MacBook Air M2 (J413). Only ES256, like the TPM backend.
 
 ## Managing passkeys
 
@@ -253,6 +268,7 @@ Applied by the flake (`patches/`) on top of OpenSK `a93efdb`:
 | `src/backend.rs` | `Backend` trait (credential keys + store cipher), process-global; shared conformance test |
 | `src/crypto.rs` | OpenSK `Ecdsa` over the backend's wrapped key material |
 | `src/tpm.rs` | TPM backend: TPM2 Create/Load/Sign; store key sealed to the TPM |
+| `src/sep.rs` | Secure Enclave backend: enclave key create/sign ioctls; store key is an enclave-sealed kernel trusted key, AES-GCM in the kernel (AF_ALG) |
 | `src/store.rs` | AES-256-GCM file store, TPM-sealed key, writer lock |
 | `src/presence.rs` | user presence = pinentry Confirm |
 | `src/fingerprint.rs` | built-in UV = pinentry Confirm (one enrolled "template") |
@@ -296,6 +312,10 @@ swtpm socket --tpm2 --tpmstate dir=/tmp/swtpm --server type=tcp,port=2321 \
   --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear --daemon
 LINUX_PASSKEY_TEST_TCTI=swtpm:host=localhost,port=2321 cargo test
 ```
+
+On an Apple Silicon Mac with the Secure Enclave key ioctls (see below):
+`LINUX_PASSKEY_TEST_SEP=/dev/sep-bio cargo test sep_backend_conformance`
+(as a user with access to the device).
 
 ## License
 
