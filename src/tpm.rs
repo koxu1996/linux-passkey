@@ -263,3 +263,99 @@ pub fn public_coords(public_blob: &[u8]) -> Result<([u8; 32], [u8; 32])> {
         _ => Err(anyhow!("not an ECC public key")),
     }
 }
+
+// --- Backend --------------------------------------------------------------------
+
+/// [`crate::backend::Backend`] over this module's process-global TPM context
+/// ([`init`] first). Key material keeps the v0.1.0 export format,
+/// `[u16 BE private_len][TPM2B_PRIVATE][TPM2B_PUBLIC]`, so existing stores load.
+pub struct TpmBackend;
+
+impl crate::backend::Backend for TpmBackend {
+    fn name(&self) -> &'static str {
+        "TPM"
+    }
+
+    fn create_key(&self) -> Result<Vec<u8>> {
+        let (private_blob, public_blob) = create_key()?;
+        let mut out = Vec::with_capacity(2 + private_blob.len() + public_blob.len());
+        out.extend_from_slice(&(private_blob.len() as u16).to_be_bytes());
+        out.extend_from_slice(&private_blob);
+        out.extend_from_slice(&public_blob);
+        Ok(out)
+    }
+
+    fn public_coords(&self, key: &[u8]) -> Result<([u8; 32], [u8; 32])> {
+        let (_, public_blob) = split_key(key)?;
+        public_coords(public_blob)
+    }
+
+    fn sign(&self, key: &[u8], message: &[u8]) -> Result<[u8; 64]> {
+        let (private_blob, public_blob) = split_key(key)?;
+        sign(private_blob, public_blob, message)
+    }
+
+    /// `dir/seal.blob` holds the TPM-sealed AES-256 key,
+    /// `[u16 LE priv_len][TPM2B_PRIVATE][TPM2B_PUBLIC]`; it is unsealed into memory
+    /// and the store is encrypted in software.
+    fn store_cipher(&self, dir: &std::path::Path) -> Result<Box<dyn crate::backend::StoreCipher>> {
+        let seal_path = dir.join("seal.blob");
+        let key = if seal_path.exists() {
+            let (priv_b, pub_b) = split_seal_blob(&std::fs::read(&seal_path)?)?;
+            unseal_key(&priv_b, &pub_b)?
+        } else {
+            let (priv_b, pub_b, key) = seal_new_key()?;
+            std::fs::write(&seal_path, join_seal_blob(&priv_b, &pub_b))?;
+            tracing::info!("sealed a fresh store key to the TPM");
+            key
+        };
+        Ok(Box::new(crate::store::SoftwareGcm::new(key)))
+    }
+}
+
+/// Split credential key material into (private, public) TPM blobs.
+fn split_key(key: &[u8]) -> Result<(&[u8], &[u8])> {
+    if key.len() < 2 {
+        return Err(anyhow!("key material too short"));
+    }
+    let plen = u16::from_be_bytes([key[0], key[1]]) as usize;
+    if key.len() < 2 + plen {
+        return Err(anyhow!("key material truncated"));
+    }
+    Ok((&key[2..2 + plen], &key[2 + plen..]))
+}
+
+// seal.blob framing: [u16 LE priv_len][priv][pub]
+fn join_seal_blob(private_blob: &[u8], public_blob: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + private_blob.len() + public_blob.len());
+    out.extend_from_slice(&(private_blob.len() as u16).to_le_bytes());
+    out.extend_from_slice(private_blob);
+    out.extend_from_slice(public_blob);
+    out
+}
+
+fn split_seal_blob(blob: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    if blob.len() < 2 {
+        return Err(anyhow!("seal blob too short"));
+    }
+    let plen = u16::from_le_bytes([blob[0], blob[1]]) as usize;
+    if blob.len() < 2 + plen {
+        return Err(anyhow!("seal blob truncated"));
+    }
+    Ok((blob[2..2 + plen].to_vec(), blob[2 + plen..].to_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Real TPM operations, so opt-in: run against swtpm (see README, Development)
+    /// with `LINUX_PASSKEY_TEST_TCTI=swtpm:host=localhost,port=2321 cargo test`.
+    #[test]
+    fn tpm_backend_conformance() {
+        let Ok(tcti) = std::env::var("LINUX_PASSKEY_TEST_TCTI") else {
+            eprintln!("skipped: set LINUX_PASSKEY_TEST_TCTI (a swtpm TCTI) to run");
+            return;
+        };
+        super::init(&tcti).expect("TPM init");
+        crate::backend::conformance::check(&super::TpmBackend);
+    }
+}

@@ -2,7 +2,7 @@
 //!
 //! CTAP's own credential management (browser settings, `fido2-token -L`) needs
 //! a pinUvAuthToken, i.e. a clientPIN, which this authenticator deliberately
-//! does not have. These commands read the TPM-sealed store directly instead.
+//! does not have. These commands read the hardware-sealed store directly instead.
 //! Only discoverable credentials (passkeys) are stored; non-discoverable ones
 //! live wrapped inside the site's credential id and cannot be listed.
 

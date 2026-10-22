@@ -1,8 +1,9 @@
-//! A `Crypto` for OpenSK where credential signing is TPM-backed.
+//! A `Crypto` for OpenSK where credential signing is hardware-backed.
 //!
-//! Only `Ecdsa` (the credential signing keys) goes to the TPM; AES/SHA/HMAC/
-//! HKDF/ECDH reuse OpenSK's software implementations (they protect PIN/wrapping
-//! state, not the credential private keys).
+//! Only `Ecdsa` (the credential signing keys) goes to the hardware backend (see
+//! [`crate::backend`]); AES/SHA/HMAC/HKDF/ECDH reuse OpenSK's software
+//! implementations (they protect PIN/wrapping state, not the credential private
+//! keys).
 
 use opensk::api::crypto::Crypto;
 use opensk::api::crypto::ec_signing::{EcPublicKey, EcSecretKey, EcSignature, Ecdsa};
@@ -12,94 +13,82 @@ use opensk::api::crypto::software_crypto::{
 use opensk::api::crypto::EC_FIELD_SIZE;
 use opensk::api::rng::Rng;
 
-pub struct TpmCrypto;
+pub struct HwCrypto;
 
-impl Crypto for TpmCrypto {
+impl Crypto for HwCrypto {
     type Aes256 = SoftwareAes256;
     type Ecdh = SoftwareEcdh;
-    type Ecdsa = TpmEcdsa;
+    type Ecdsa = HwEcdsa;
     type Sha256 = SoftwareSha256;
     type Hmac256 = SoftwareHmac256;
     type Hkdf256 = SoftwareHkdf256;
 }
 
-pub struct TpmEcdsa;
+pub struct HwEcdsa;
 
-impl Ecdsa for TpmEcdsa {
-    type SecretKey = TpmSecretKey;
-    type PublicKey = TpmPublicKey;
-    type Signature = TpmSignature;
+impl Ecdsa for HwEcdsa {
+    type SecretKey = HwSecretKey;
+    type PublicKey = HwPublicKey;
+    type Signature = HwSignature;
 }
 
-/// A credential signing key, stored as its TPM-wrapped (private, public) blobs.
-pub struct TpmSecretKey {
-    private_blob: Vec<u8>,
-    public_blob: Vec<u8>,
+/// A credential signing key, held as the backend's wrapped key material (opaque
+/// here; only the backend that created it can use it).
+pub struct HwSecretKey {
+    key: Vec<u8>,
 }
 
-pub struct TpmPublicKey {
+pub struct HwPublicKey {
     x: [u8; 32],
     y: [u8; 32],
 }
 
-pub struct TpmSignature {
+pub struct HwSignature {
     raw: [u8; 64],
 }
 
-impl EcSecretKey for TpmSecretKey {
-    type PublicKey = TpmPublicKey;
-    type Signature = TpmSignature;
+impl EcSecretKey for HwSecretKey {
+    type PublicKey = HwPublicKey;
+    type Signature = HwSignature;
 
     fn random(_rng: &mut impl Rng) -> Self {
-        // The TPM generates the key; `_rng` is unused. The trait can't return an
-        // error, so a TPM failure here is fatal (the daemon can't function).
-        let (private_blob, public_blob) =
-            crate::tpm::create_key().expect("TPM create_key failed");
-        TpmSecretKey {
-            private_blob,
-            public_blob,
-        }
+        // The hardware generates the key; `_rng` is unused. The trait can't return
+        // an error, so a backend failure here is fatal (the daemon can't function).
+        let key = crate::backend::get()
+            .create_key()
+            .expect("backend create_key failed");
+        HwSecretKey { key }
     }
 
-    fn public_key(&self) -> TpmPublicKey {
-        let (x, y) =
-            crate::tpm::public_coords(&self.public_blob).expect("TPM public_coords failed");
-        TpmPublicKey { x, y }
+    fn public_key(&self) -> HwPublicKey {
+        let (x, y) = crate::backend::get()
+            .public_coords(&self.key)
+            .expect("backend public_coords failed");
+        HwPublicKey { x, y }
     }
 
-    fn sign(&self, message: &[u8]) -> TpmSignature {
-        let raw = crate::tpm::sign(&self.private_blob, &self.public_blob, message)
-            .expect("TPM sign failed");
-        TpmSignature { raw }
+    fn sign(&self, message: &[u8]) -> HwSignature {
+        let raw = crate::backend::get()
+            .sign(&self.key, message)
+            .expect("backend sign failed");
+        HwSignature { raw }
     }
 
     fn export(&self) -> Vec<u8> {
-        // Deterministic: [u16 BE private_len][private][public]. The blobs are
-        // TPM-wrapped, so this is safe to persist on disk.
-        let mut out = Vec::with_capacity(2 + self.private_blob.len() + self.public_blob.len());
-        out.extend_from_slice(&(self.private_blob.len() as u16).to_be_bytes());
-        out.extend_from_slice(&self.private_blob);
-        out.extend_from_slice(&self.public_blob);
-        out
+        // The backend's wrapped material, as created: safe to persist on disk.
+        self.key.clone()
     }
 
     fn import(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 2 {
+        if bytes.is_empty() {
             return None;
         }
-        let plen = u16::from_be_bytes([bytes[0], bytes[1]]) as usize;
-        if bytes.len() < 2 + plen {
-            return None;
-        }
-        Some(TpmSecretKey {
-            private_blob: bytes[2..2 + plen].to_vec(),
-            public_blob: bytes[2 + plen..].to_vec(),
-        })
+        Some(HwSecretKey { key: bytes.to_vec() })
     }
 }
 
-impl EcPublicKey for TpmPublicKey {
-    type Signature = TpmSignature;
+impl EcPublicKey for HwPublicKey {
+    type Signature = HwSignature;
 
     fn to_coordinates(&self, x: &mut [u8; EC_FIELD_SIZE], y: &mut [u8; EC_FIELD_SIZE]) {
         x.copy_from_slice(&self.x);
@@ -107,7 +96,7 @@ impl EcPublicKey for TpmPublicKey {
     }
 }
 
-impl EcSignature for TpmSignature {
+impl EcSignature for HwSignature {
     fn to_der(&self) -> Vec<u8> {
         der_encode_ecdsa(&self.raw)
     }

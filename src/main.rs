@@ -4,6 +4,7 @@
 // sk-cbor's macros expand to `::alloc::…` paths.
 extern crate alloc;
 
+mod backend;
 mod cli;
 mod clock;
 mod crypto;
@@ -43,7 +44,8 @@ USAGE:
 ENVIRONMENT:
   LINUX_PASSKEY_DATA_DIR   store dir (default ~/.local/share/linux-passkey)
   LINUX_PASSKEY_TCTI       TPM (default device:/dev/tpmrm0)
-  LINUX_PASSKEY_PINENTRY   pinentry binary for the confirm dialog";
+  LINUX_PASSKEY_PINENTRY   pinentry binary for the confirm dialog
+  LINUX_PASSKEY_BACKEND    hardware behind the keys: tpm (default)";
 
 /// `LINUX_PASSKEY_<name>`, falling back to the pre-rename `TPM2_PASSKEY_<name>`.
 fn env_var(name: &str) -> Option<String> {
@@ -107,7 +109,15 @@ fn main() -> Result<()> {
         anyhow::bail!("unknown command '{command}'\n\n{USAGE}");
     }
 
-    tpm::init(&tcti)?;
+    // The hardware behind the keys and the store. Only "tpm" so far.
+    let backend_name = env_var("BACKEND").unwrap_or_else(|| "tpm".into());
+    match backend_name.as_str() {
+        "tpm" => {
+            tpm::init(&tcti)?;
+            backend::init(Box::new(tpm::TpmBackend))?;
+        }
+        other => anyhow::bail!("unknown LINUX_PASSKEY_BACKEND '{other}' (supported: tpm)"),
+    }
     match command {
         "list" => {
             let rp = match args.get(1).map(String::as_str) {
@@ -121,8 +131,11 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    tracing::info!("linux-passkey starting (OpenSK core, TPM-backed keys + sealed store)");
-    tracing::info!("TPM backend ready ({tcti})");
+    let hw = backend::get().name();
+    tracing::info!("linux-passkey starting (OpenSK core, {hw}-backed keys + sealed store)");
+    if backend_name == "tpm" {
+        tracing::info!("TPM backend ready ({tcti})");
+    }
     // Take the store lock before creating the device, so a second daemon
     // fails cleanly instead of fighting over the same store.
     let env = AppEnv::new(UhidConnection::detached(), pinentry_bin, data_dir, true)?;

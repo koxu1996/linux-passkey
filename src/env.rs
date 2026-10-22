@@ -1,6 +1,6 @@
-//! The OpenSK `Env` for our Linux daemon: software crypto (M1) + an in-memory
-//! credential store, wired to the uhid transport and pinentry user-presence.
-//! Later milestones swap `Crypto` to TPM and the store to a TPM-sealed file.
+//! The OpenSK `Env` for our Linux daemon: hardware-backed credential keys (see
+//! `crate::backend`) and an encrypted file store, wired to the uhid transport and
+//! pinentry user-presence.
 
 use opensk::api::customization::{CustomizationImpl, DEFAULT_CUSTOMIZATION};
 use opensk::api::key_store;
@@ -10,7 +10,7 @@ use opensk::env::Env;
 use std::path::PathBuf;
 
 use crate::clock::RealClock;
-use crate::crypto::TpmCrypto;
+use crate::crypto::HwCrypto;
 use crate::fingerprint::PinentryFingerprint;
 use crate::presence::PinentryPresence;
 use crate::rng::AppRng;
@@ -68,7 +68,7 @@ impl AppEnv {
     }
 }
 
-// --- Persist: file-backed, AES-256-GCM encrypted, key TPM-sealed (M3) --------
+// --- Persist: file-backed, encrypted with a hardware-protected key ------------
 impl Persist for AppEnv {
     fn find(&self, key: usize) -> CtapResult<Option<Vec<u8>>> {
         Ok(self.store.get(key))
@@ -103,7 +103,7 @@ impl Env for AppEnv {
     type Write = LogWrite;
     type Customization = CustomizationImpl;
     type HidConnection = UhidConnection;
-    type Crypto = TpmCrypto;
+    type Crypto = HwCrypto;
 
     fn rng(&mut self) -> &mut Self::Rng {
         &mut self.rng

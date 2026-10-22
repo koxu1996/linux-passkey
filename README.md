@@ -99,6 +99,7 @@ LINUX_PASSKEY_PINENTRY=$(command -v pinentry-qt) ./result/bin/linux-passkey
 |---|---|---|
 | `LINUX_PASSKEY_PINENTRY` | `pinentry` | pinentry binary for the dialog (`pinentry-qt` works under Hyprland; `pinentry-gnome3` silently fails there) |
 | `LINUX_PASSKEY_DATA_DIR` | `~/.local/share/linux-passkey` | credential store |
+| `LINUX_PASSKEY_BACKEND` | `tpm` | hardware behind the keys and the store (only `tpm` so far) |
 | `LINUX_PASSKEY_TCTI` | `device:/dev/tpmrm0` | TPM; use `swtpm:…` for a software TPM |
 | `RUST_LOG` | `info` | `linux_passkey::request=debug` logs every request (op, site, user, UV) |
 
@@ -249,7 +250,9 @@ Applied by the flake (`patches/`) on top of OpenSK `a93efdb`:
 | `src/main.rs` | CLI dispatch; daemon loop: HID report → request peek → `Ctap::process_hid_packet` → send |
 | `src/uhid.rs` | virtual FIDO HID device (usage page `0xF1D0`) over `/dev/uhid` |
 | `src/env.rs` | OpenSK `Env`: wires TPM crypto, store, prompts, clock, RNG |
-| `src/crypto.rs`, `src/tpm.rs` | OpenSK `Ecdsa` backed by TPM2 Create/Load/Sign; seal/unseal |
+| `src/backend.rs` | `Backend` trait (credential keys + store cipher), process-global; shared conformance test |
+| `src/crypto.rs` | OpenSK `Ecdsa` over the backend's wrapped key material |
+| `src/tpm.rs` | TPM backend: TPM2 Create/Load/Sign; store key sealed to the TPM |
 | `src/store.rs` | AES-256-GCM file store, TPM-sealed key, writer lock |
 | `src/presence.rs` | user presence = pinentry Confirm |
 | `src/fingerprint.rs` | built-in UV = pinentry Confirm (one enrolled "template") |
@@ -284,7 +287,15 @@ provides Rust, tpm2-tss, swtpm and tpm2-tools; then set
 `LINUX_PASSKEY_TCTI=swtpm:…` and a scratch `LINUX_PASSKEY_DATA_DIR`.
 
 `cargo test` covers request parsing: multi-packet reassembly, excludeList/UV
-parsing, dialog wording, and text cleaning.
+parsing, dialog wording, and text cleaning. The backend conformance test (keys
+differ, signatures verify with their own key only) needs real hardware, so it is
+opt-in; against swtpm:
+
+```sh
+swtpm socket --tpm2 --tpmstate dir=/tmp/swtpm --server type=tcp,port=2321 \
+  --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear --daemon
+LINUX_PASSKEY_TEST_TCTI=swtpm:host=localhost,port=2321 cargo test
+```
 
 ## License
 

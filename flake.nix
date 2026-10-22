@@ -12,7 +12,12 @@
 
   outputs = { self, nixpkgs, opensk }:
     let
-      system = "x86_64-linux";
+      # x86_64: TPM machines; aarch64: also Apple Silicon (Secure Enclave backend).
+      systems = [ "x86_64-linux" "aarch64-linux" ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
+
+      perSystem = system:
+    let
       pkgs = nixpkgs.legacyPackages.${system};
 
       # Apply our one-line getInfo patch (pinUvAuthToken only when a PIN is set)
@@ -68,7 +73,7 @@
       linuxPasskeyTests = (mkLinuxPasskey { pname = "linux-passkey-tests"; }).overrideAttrs { doCheck = true; };
     in
     {
-      packages.${system} = {
+      packages = {
         default = linux-passkey;
         linux-passkey = linux-passkey;
         # With OpenSK's internal debug output (run with RUST_LOG=debug).
@@ -80,12 +85,9 @@
 
       # `nix flake check`: build + unit tests (request parsing, prompts). The
       # tests need no TPM; the package itself skips them (doCheck = false).
-      checks.${system}.tests = linuxPasskeyTests;
+      checks.tests = linuxPasskeyTests;
 
-      # NixOS module (systemd user service) — added in nix/module.nix.
-      nixosModules.default = import ./nix/module.nix self;
-
-      devShells.${system}.default = pkgs.mkShell {
+      devShell = pkgs.mkShell {
         name = "linux-passkey-dev";
         nativeBuildInputs = with pkgs; [
           rustc
@@ -103,5 +105,14 @@
           echo "linux-passkey dev shell (rustc $(rustc --version 2>/dev/null | awk '{print $2}'), tpm2-tss ${pkgs.tpm2-tss.version})"
         '';
       };
+    };
+    in
+    {
+      packages = forAllSystems (system: (perSystem system).packages);
+      checks = forAllSystems (system: (perSystem system).checks);
+      devShells = forAllSystems (system: { default = (perSystem system).devShell; });
+
+      # NixOS module (systemd user service) — added in nix/module.nix.
+      nixosModules.default = import ./nix/module.nix self;
     };
 }

@@ -29,6 +29,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 
+[dev-dependencies]
+# Verify backend signatures in tests (already in the tree via OpenSK).
+p256 = { version = "0.13", features = ["ecdsa"] }
+
 [features]
 # OpenSK's internal debug output (debug_ctap! lines) through tracing, at debug
 # level: `nix build .#debug`, then RUST_LOG=debug.
