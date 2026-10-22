@@ -77,7 +77,9 @@ fn main() -> Result<()> {
         match ctap.env().hid_connection().recv(&mut buf, 60_000) {
             Ok(RecvStatus::Received(_endpoint)) => {
                 // Note what is being asked (op + site) for the confirm prompt.
-                requests.feed(&buf);
+                if requests.feed(&buf) {
+                    request::check_already_registered(ctap.env());
+                }
                 let out = ctap.process_hid_packet(&buf, Transport::MainHid);
                 // Collect to drop the &mut ctap borrow before sending.
                 let packets: Vec<_> = out.collect();

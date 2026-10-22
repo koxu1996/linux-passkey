@@ -10,7 +10,20 @@
 //!
 //! Everything here is display-only: OpenSK still parses and validates the
 //! request itself, so a malformed message just leaves the prompt generic.
+//!
+//! Already registered: a makeCredential's excludeList names the credentials the
+//! site already has for this account. OpenSK rejects the request if one of them
+//! is ours, but only after a presence gesture (anti-probing), and after the UV
+//! prompt if UV was asked for — two dialogs both saying "Create a passkey".
+//! `already_registered` runs OpenSK's own match up front, so the (single)
+//! prompt can say so, and the follow-up presence check for that same request is
+//! answered by the gesture already given.
 
+use opensk::api::key_store::KeyStore;
+use opensk::ctap::data_formats::CredentialProtectionPolicy;
+use opensk::env::Env;
+use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 const CTAPHID_MSG: u8 = 0x83;
@@ -22,7 +35,16 @@ const MAX_MSG: usize = INIT_DATA + 128 * CONT_DATA;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
-    Register { rp: String, user: Option<String> },
+    Register {
+        rp: String,
+        user: Option<String>,
+        /// Credential ids from the excludeList.
+        exclude: Vec<Vec<u8>>,
+        /// UV requested (options.uv) or a pinUvAuthParam supplied.
+        has_uv: bool,
+        /// One of `exclude` is ours: the site already has this authenticator.
+        existing: bool,
+    },
     SignIn { rp: String },
     Reset,
     Select,
@@ -32,10 +54,64 @@ pub enum Request {
 }
 
 static CURRENT: Mutex<Option<Request>> = Mutex::new(None);
+/// The user already confirmed a dialog for the current request.
+static CONFIRMED: AtomicBool = AtomicBool::new(false);
 
 /// The request the authenticator is currently working on, if known.
 pub fn current() -> Option<Request> {
     CURRENT.lock().ok().and_then(|g| g.clone())
+}
+
+/// Record that the user confirmed a dialog for the current request.
+pub fn note_confirmed() {
+    CONFIRMED.store(true, Ordering::SeqCst);
+}
+
+/// True when a presence check can be answered without another dialog: the
+/// current registration is a duplicate and the user already confirmed it once.
+/// (OpenSK asks for presence again before rejecting excluded credentials.)
+pub fn presence_already_given() -> bool {
+    CONFIRMED.load(Ordering::SeqCst)
+        && matches!(current(), Some(Request::Register { existing: true, .. }))
+}
+
+fn mark_existing() {
+    if let Ok(mut g) = CURRENT.lock() {
+        if let Some(Request::Register { existing, .. }) = g.as_mut() {
+            *existing = true;
+        }
+    }
+}
+
+/// Mirror OpenSK's excludeList check (ctap/mod.rs, process_make_credential):
+/// a listed id that is one of our resident credentials, or a wrapped
+/// credential for this rp, excludes the request — unless it is credProtect
+/// UV-required and this request has no UV. Marks the current request.
+pub fn check_already_registered<E: Env>(env: &mut E) {
+    let Some(Request::Register { rp, exclude, has_uv, .. }) = current() else {
+        return;
+    };
+    let usable = |p: Option<CredentialProtectionPolicy>| {
+        has_uv || p != Some(CredentialProtectionPolicy::UserVerificationRequired)
+    };
+    let rp_hash = Sha256::digest(rp.as_bytes());
+    let ours = exclude.iter().any(|id| {
+        let resident = opensk::ctap::storage::find_credential(env, &rp, id)
+            .ok()
+            .flatten()
+            .is_some_and(|c| usable(c.cred_protect_policy));
+        resident
+            || env
+                .key_store()
+                .unwrap_credential(id, &rp_hash)
+                .ok()
+                .flatten()
+                .is_some_and(|c| usable(c.cred_protect_policy))
+    });
+    if ours {
+        tracing::info!(%rp, "excludeList matches one of our credentials: already registered");
+        mark_existing();
+    }
 }
 
 /// Reassembles CTAPHID messages from 64-byte reports (one in flight at a time,
@@ -51,15 +127,16 @@ pub struct Reassembler {
 }
 
 impl Reassembler {
-    /// Feed one HID report; on a completed message, records what it asks for.
-    pub fn feed(&mut self, pkt: &[u8; 64]) {
+    /// Feed one HID report; on a completed message, records what it asks for
+    /// and returns true.
+    pub fn feed(&mut self, pkt: &[u8; 64]) -> bool {
         let cid: [u8; 4] = pkt[0..4].try_into().unwrap();
         if pkt[4] & 0x80 != 0 {
             // Init packet: starts a new message (and abandons any partial one).
             let len = u16::from_be_bytes([pkt[5], pkt[6]]) as usize;
             if len > MAX_MSG {
                 self.active = false;
-                return;
+                return false;
             }
             self.cid = cid;
             self.cmd = pkt[4];
@@ -73,7 +150,7 @@ impl Reassembler {
             // Continuation packet: must follow in order on the same channel.
             if !self.active || cid != self.cid || pkt[4] != self.next_seq {
                 self.active = false;
-                return;
+                return false;
             }
             self.next_seq += 1;
             let take = (self.len - self.data.len()).min(CONT_DATA);
@@ -83,11 +160,14 @@ impl Reassembler {
             self.active = false;
             if let Some(req) = classify(self.cmd, &self.data) {
                 tracing::debug!(?req, "incoming request");
+                CONFIRMED.store(false, Ordering::SeqCst);
                 if let Ok(mut g) = CURRENT.lock() {
                     *g = Some(req);
                 }
+                return true;
             }
         }
+        false
     }
 }
 
@@ -137,7 +217,9 @@ fn take_text(map: &mut Vec<(sk_cbor::Value, sk_cbor::Value)>, key: &str) -> Opti
     map.swap_remove(i).1.extract_text_string()
 }
 
-// authenticatorMakeCredential: 0x02 = rp {id, name}, 0x03 = user {id, name, displayName}.
+// authenticatorMakeCredential: 0x02 = rp {id, name}, 0x03 = user {id, name,
+// displayName}, 0x05 = excludeList [{type, id}], 0x07 = options {uv, …},
+// 0x08 = pinUvAuthParam.
 fn make_credential(body: &[u8]) -> Option<Request> {
     let mut map = cbor_map(body)?;
     let mut rp = take_int(&mut map, 0x02)?.extract_map()?;
@@ -145,7 +227,29 @@ fn make_credential(body: &[u8]) -> Option<Request> {
     let user = take_int(&mut map, 0x03)
         .and_then(|u| u.extract_map())
         .and_then(|mut u| take_text(&mut u, "name").or_else(|| take_text(&mut u, "displayName")));
-    Some(Request::Register { rp, user })
+    let exclude = take_int(&mut map, 0x05)
+        .and_then(|l| l.extract_array())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|d| {
+            let mut d = d.extract_map()?;
+            let i = d
+                .iter()
+                .position(|(k, _)| k.clone().extract_text_string().as_deref() == Some("id"))?;
+            d.swap_remove(i).1.extract_byte_string()
+        })
+        .collect();
+    let uv_option = take_int(&mut map, 0x07)
+        .and_then(|o| o.extract_map())
+        .and_then(|mut o| {
+            let i = o
+                .iter()
+                .position(|(k, _)| k.clone().extract_text_string().as_deref() == Some("uv"))?;
+            o.swap_remove(i).1.extract_bool()
+        })
+        .unwrap_or(false);
+    let has_uv = uv_option || take_int(&mut map, 0x08).is_some();
+    Some(Request::Register { rp, user, exclude, has_uv, existing: false })
 }
 
 // authenticatorGetAssertion: 0x01 = rpId.
@@ -183,7 +287,24 @@ impl Prompt {
             ok: ok.to_string(),
         };
         match req {
-            Some(Request::Register { rp, user }) => p(
+            Some(Request::Register { rp, user, existing: true, .. }) => p(
+                "tpm2-passkey — Already registered",
+                match user {
+                    Some(u) => format!(
+                        "{} already has a passkey from this device for \"{}\". \
+                         Nothing new will be created; OK lets the site know.",
+                        clean(rp),
+                        clean(u)
+                    ),
+                    None => format!(
+                        "{} already has a passkey from this device. \
+                         Nothing new will be created; OK lets the site know.",
+                        clean(rp)
+                    ),
+                },
+                "OK",
+            ),
+            Some(Request::Register { rp, user, .. }) => p(
                 "tpm2-passkey — Register",
                 match user {
                     Some(u) => format!(
@@ -232,7 +353,7 @@ impl Prompt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sk_cbor::cbor_map;
+    use sk_cbor::{cbor_array, cbor_map};
 
     // Tests share the process-wide CURRENT slot.
     static SERIAL: Mutex<()> = Mutex::new(());
@@ -281,8 +402,51 @@ mod tests {
         }
         assert_eq!(
             current(),
-            Some(Request::Register { rp: "webauthn.io".into(), user: Some("andrew".into()) })
+            Some(Request::Register {
+                rp: "webauthn.io".into(),
+                user: Some("andrew".into()),
+                exclude: vec![],
+                has_uv: false,
+                existing: false,
+            })
         );
+    }
+
+    #[test]
+    fn make_credential_exclude_list_and_uv() {
+        let _g = SERIAL.lock().unwrap();
+        let req = cbor_req(
+            0x01,
+            cbor_map! {
+                0x01 => sk_cbor::cbor_bytes!(vec![0xAA; 32]),
+                0x02 => cbor_map! { "id" => "webauthn.io" },
+                0x03 => cbor_map! { "id" => sk_cbor::cbor_bytes!(vec![1; 16]), "displayName" => "Andrew" },
+                0x05 => cbor_array! [
+                    cbor_map! { "id" => sk_cbor::cbor_bytes!(vec![7; 20]), "type" => "public-key" },
+                    cbor_map! { "id" => sk_cbor::cbor_bytes!(vec![8; 20]), "type" => "public-key" },
+                ],
+                0x07 => cbor_map! { "rk" => true, "uv" => true },
+            },
+        );
+        let mut r = Reassembler::default();
+        let done: Vec<bool> = packets(CTAPHID_CBOR, &req).iter().map(|p| r.feed(p)).collect();
+        assert_eq!(done.iter().filter(|d| **d).count(), 1);
+        assert!(*done.last().unwrap());
+        let Some(Request::Register { user, exclude, has_uv, existing, .. }) = current() else {
+            panic!("not a register request");
+        };
+        assert_eq!(user.as_deref(), Some("Andrew"));
+        assert_eq!(exclude, vec![vec![7; 20], vec![8; 20]]);
+        assert!(has_uv);
+        assert!(!existing);
+        // Not a duplicate (yet), so presence is never auto-answered.
+        note_confirmed();
+        assert!(!presence_already_given());
+        mark_existing();
+        assert!(presence_already_given());
+        let prompt = Prompt::for_request(current().as_ref());
+        assert_eq!(prompt.ok, "OK");
+        assert!(prompt.description.starts_with("webauthn.io already has a passkey"));
     }
 
     #[test]

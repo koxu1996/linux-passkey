@@ -1,0 +1,11 @@
+--- a/libraries/opensk/src/ctap/mod.rs
++++ b/libraries/opensk/src/ctap/mod.rs
+@@ -31,7 +31,7 @@
+ pub mod response;
+ pub mod secret;
+ pub mod status_code;
+-mod storage;
++pub mod storage;
+ mod token_state;
+ #[cfg(feature = "ctap1")]
+ mod u2f_up;

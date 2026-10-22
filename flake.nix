@@ -20,7 +20,11 @@
       patchedOpenSK = pkgs.applyPatches {
         name = "opensk-patched";
         src = opensk;
-        patches = [ ./patches/opensk-pinuvauthtoken.patch ];
+        patches = [
+          ./patches/opensk-pinuvauthtoken.patch
+          # Expose ctap::storage so we can spot already-registered sites.
+          ./patches/opensk-pub-storage.patch
+        ];
       };
 
       # Replicate the dev layout (crate + sibling OpenSK) so the Cargo.toml path

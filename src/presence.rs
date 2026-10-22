@@ -34,6 +34,13 @@ impl PinentryPresence {
 impl UserPresence for PinentryPresence {
     fn check_init(&mut self) {
         let (tx, rx) = mpsc::channel();
+        if request::presence_already_given() {
+            // Duplicate registration: OpenSK re-checks presence before
+            // rejecting it, but the user just confirmed this very request.
+            let _ = tx.send(true);
+            self.pending = Some(rx);
+            return;
+        }
         let bin = self.pinentry_bin.clone();
         let prompt = Prompt::for_request(request::current().as_ref());
         std::thread::spawn(move || {
@@ -49,7 +56,10 @@ impl UserPresence for PinentryPresence {
     ) -> UserPresenceWaitResult {
         let up = match &self.pending {
             Some(rx) => match rx.recv_timeout(Duration::from_millis(timeout_ms as u64)) {
-                Ok(true) => Ok(()),
+                Ok(true) => {
+                    request::note_confirmed();
+                    Ok(())
+                }
                 Ok(false) => Err(UserPresenceError::Declined),
                 Err(RecvTimeoutError::Timeout) => Err(UserPresenceError::Timeout), // keep waiting
                 Err(RecvTimeoutError::Disconnected) => Err(UserPresenceError::Declined),

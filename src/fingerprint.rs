@@ -65,7 +65,10 @@ impl Fingerprint for PinentryFingerprint {
     fn check_fingerprint(&mut self, timeout_ms: usize) -> Result<(), FingerprintCheckError> {
         match &self.pending {
             Some(rx) => match rx.recv_timeout(Duration::from_millis(timeout_ms as u64)) {
-                Ok(true) => Ok(()),
+                Ok(true) => {
+                    crate::request::note_confirmed();
+                    Ok(())
+                }
                 Ok(false) => Err(FingerprintCheckError::NoMatch),
                 Err(RecvTimeoutError::Timeout) => Err(FingerprintCheckError::Timeout), // keep waiting
                 Err(RecvTimeoutError::Disconnected) => Err(FingerprintCheckError::Other),
