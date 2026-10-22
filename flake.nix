@@ -24,6 +24,8 @@
           ./patches/opensk-pinuvauthtoken.patch
           # Expose ctap::storage so we can spot already-registered sites.
           ./patches/opensk-pub-storage.patch
+          # Verify the user on registration too (makeCredUvNotRqd=false).
+          ./patches/opensk-uv-on-register.patch
         ];
       };
 
