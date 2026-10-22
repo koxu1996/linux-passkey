@@ -1,0 +1,28 @@
+[package]
+name = "tpm2-passkey"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "A TPM 2.0-backed FIDO2/CTAP2 authenticator for Linux (built on OpenSK)"
+
+[dependencies]
+# OpenSK CTAP2 core (path dep to the cloned repo), with its std software backend.
+# "fingerprint" = OpenSK's built-in user-verification path; we back it with a
+# pinentry confirm so the browser never asks for a clientPIN.
+opensk = { path = "../OpenSK/libraries/opensk", features = ["std", "fingerprint"] }
+# Virtual USB-HID device via /dev/uhid.
+uhid-virt = "0.0.8"
+# pinentry popup for user presence/verification (same flavor gpg-agent uses).
+pinentry = "0.5"
+# TPM 2.0 for credential key generation + signing (same versions as fidorium;
+# the -sys alpha is required — stable 0.6.0's bindings mismatch the 8.0 alpha).
+tss-esapi = "=8.0.0-alpha.1"
+tss-esapi-sys = "=0.6.0-alpha.1"
+sha2 = "0.10"
+# AES-256-GCM to encrypt the on-disk credential store (key is TPM-sealed).
+aes-gcm = "0.10"
+# Randomness, logging, errors.
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"

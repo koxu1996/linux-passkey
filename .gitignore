@@ -1,0 +1,7 @@
+/target
+/result
+/result-*
+.direnv/
+# local software-TPM state
+/swtpm-state/
+*.swp
