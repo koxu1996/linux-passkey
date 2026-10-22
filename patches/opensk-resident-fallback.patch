@@ -1,0 +1,46 @@
+diff --git a/libraries/opensk/src/ctap/mod.rs b/libraries/opensk/src/ctap/mod.rs
+index 5be2296..e7c097e 100644
+--- a/libraries/opensk/src/ctap/mod.rs
++++ b/libraries/opensk/src/ctap/mod.rs
+@@ -939,7 +939,23 @@ impl<E: Env> CtapState<E> {
+         // We decide on the algorithm early, but delay key creation since it takes time.
+         // We rather do that later so all intermediate checks may return faster.
+         let private_key = PrivateKey::new(env, algorithm);
+-        let credential_id = if options.rk {
++        // Non-discoverable credentials carry the wrapped key in their ID, which
++        // has a fixed size. Keys that don't fit (e.g. hardware-wrapped blobs) are
++        // stored as discoverable instead, as the platform authenticators do.
++        let wrapped_id = if options.rk {
++            None
++        } else {
++            let credential_source = CredentialSource {
++                wrapped_private_key: private_key.to_cbor(),
++                rp_id_hash,
++                cred_protect_policy,
++                cred_blob: cred_blob.clone(),
++            };
++            env.key_store().wrap_credential(credential_source).ok()
++        };
++        let credential_id = if let Some(wrapped_id) = wrapped_id {
++            wrapped_id
++        } else {
+             let random_id = env.rng().gen_uniform_u8x32().to_vec();
+             let credential_source = PublicKeyCredentialSource {
+                 key_type: PublicKeyCredentialType::PublicKey,
+@@ -965,16 +981,6 @@ impl<E: Env> CtapState<E> {
+             };
+             storage::store_credential(env, credential_source)?;
+             random_id
+-        } else {
+-            let credential_source = CredentialSource {
+-                wrapped_private_key: private_key.to_cbor(),
+-                rp_id_hash,
+-                cred_protect_policy,
+-                cred_blob,
+-            };
+-            env.key_store()
+-                .wrap_credential(credential_source)
+-                .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?
+         };
+ 
+         let mut auth_data = self.generate_auth_data(env, &rp_id_hash, flags)?;

@@ -25,6 +25,11 @@ use opensk::env::Env;
 use env::AppEnv;
 use uhid::UhidConnection;
 
+/// linux-passkey's AAGUID (random v4 UUID, see README).
+const AAGUID: [u8; 16] = [
+    0x47, 0x90, 0x68, 0x8c, 0x58, 0x23, 0x40, 0xb0, 0x90, 0x2a, 0x27, 0x24, 0xc6, 0xd7, 0xbb, 0xad,
+];
+
 const USAGE: &str = "\
 linux-passkey — TPM 2.0-backed FIDO2/CTAP2 authenticator
 
@@ -140,6 +145,19 @@ fn main() -> Result<()> {
                 tracing::warn!("could not enroll built-in UV template: {:?}", e);
             } else {
                 tracing::info!("enrolled built-in UV template (uv:true, no clientPIN)");
+            }
+        }
+    }
+
+    // Our AAGUID (4790688c-5823-40b0-902a-2724c6d7bbad), so sites can name the
+    // authenticator. Only new registrations carry it; existing passkeys are
+    // unaffected. Kept across authenticatorReset (a persistent OpenSK key).
+    {
+        use opensk::api::persist::Persist;
+        let env = ctap.env();
+        if env.aaguid().ok() != Some(AAGUID) {
+            if let Err(e) = env.set_aaguid(&AAGUID) {
+                tracing::warn!("could not set AAGUID: {:?}", e);
             }
         }
     }

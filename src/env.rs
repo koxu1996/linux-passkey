@@ -51,7 +51,12 @@ impl AppEnv {
             fingerprint: PinentryFingerprint::new(pinentry_bin),
             hid,
             clock: RealClock,
-            customization: DEFAULT_CUSTOMIZATION,
+            // 300 discoverable credentials: the whole CREDENTIALS key range
+            // (OpenSK defaults to 150 to fit small flash).
+            customization: CustomizationImpl {
+                max_supported_resident_keys: 300,
+                ..DEFAULT_CUSTOMIZATION
+            },
             store: FileStore::open(data_dir, writer)?,
         })
     }

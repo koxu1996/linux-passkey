@@ -153,21 +153,31 @@ c99c38e89f37a57b  #4    webauthn.io                  test22oct2026
 memory and would overwrite the change. Deleting here doesn't tell the site;
 remove the key in the site's settings too.
 
-Only discoverable credentials are listed. Non-discoverable ones (e.g. Google
-"2-Step Verification" keys) are stored wrapped inside the site's credential ID,
-so there's nothing local to list.
+Every credential is listed. Sites that ask for a non-discoverable credential
+(e.g. 2-Step Verification keys, `pamu2fcfg` without `-r`) get a discoverable
+one: OpenSK would wrap the key into the credential ID, but a TPM-wrapped key
+doesn't fit its fixed size, so it's stored locally instead
+(`opensk-resident-fallback.patch`; Windows Hello does the same).
 
 ## Limits
 
 - The TPM itself is not a limit. No key is kept inside the TPM's NV memory;
   each key is loaded into a transient slot, used, and flushed.
-- **150 passkeys** (OpenSK `DEFAULT_CUSTOMIZATION.max_supported_resident_keys`).
-  Raising it to 300 is a one-line customization change; above 300 needs
-  OpenSK's storage key ranges (`CREDENTIALS = 1700..2000`) patched.
+- **300 passkeys**, OpenSK's whole `CREDENTIALS = 1700..2000` storage key range
+  (its default is 150). More would need that range patched.
   For comparison, a YubiKey with firmware 5.7+ holds 100 (older ones 25).
 - Registering the same account on the same site again **replaces** the old
   passkey.
-- Non-discoverable credentials: unlimited.
+- Non-discoverable requests count against the 300 too (see above).
+
+## sudo / PAM
+
+`pam_u2f` works with it: the Confirm dialog replaces the password for sudo,
+su or polkit (`sufficient`, before `pam_unix`, so Deny falls back to the
+password). Register with `pamu2fcfg -r -u $USER -o pam://$HOST -i pam://$HOST`
+and put the line in a root-owned authfile. Screen unlock and login can't use
+it: the daemon lives in the graphical session, and a locked session can't show
+the dialog.
 
 ## Google
 
@@ -207,8 +217,10 @@ registered".
 - **Bound to this TPM.** Clearing the TPM (firmware reset, some BIOS updates,
   `tpm2_clear`) destroys every passkey, permanently. Register a second
   authenticator or recovery method on important accounts.
-- **Not hardware-attested.** Attestation is `none` and the AAGUID is all zeros.
-  Sites can't tell this from a software passkey, and sites that require
+- **Not hardware-attested.** Attestation is `none`. The AAGUID
+  `4790688c-5823-40b0-902a-2724c6d7bbad` names linux-passkey (registrations
+  from before v0.1.0 carry all zeros), but it's self-asserted: sites can't
+  tell this from a software passkey, and sites that require
   attested hardware keys (some enterprise policies) won't accept it.
 - **The dialog is the gesture.** Anything that can click your pinentry, or run
   as your user and talk to `/dev/tpmrm0` and the store, can use the passkeys.
@@ -227,6 +239,7 @@ Applied by the flake (`patches/`) on top of OpenSK `a93efdb`:
 |---|---|
 | `opensk-pinuvauthtoken.patch` | Advertise `pinUvAuthToken` only when a clientPIN is set. Otherwise browsers take the token path, which OpenSK only allows with a PIN (`PIN_NOT_SET`, "operation timed out"). |
 | `opensk-pub-storage.patch` | `mod storage` → `pub mod storage`, for duplicate detection and `list`/`delete`. |
+| `opensk-resident-fallback.patch` | Store a non-discoverable credential as discoverable when the wrapped key doesn't fit in the fixed-size credential ID (instead of `VENDOR_INTERNAL_ERROR`). |
 | `opensk-uv-on-register.patch` | `makeCredUvNotRqd: false` when built-in UV is enrolled, so registrations carry the UV flag (Google: real passkey, not 2SV). |
 
 ## Code map

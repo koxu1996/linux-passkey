@@ -26,6 +26,9 @@
           ./patches/opensk-pub-storage.patch
           # Verify the user on registration too (makeCredUvNotRqd=false).
           ./patches/opensk-uv-on-register.patch
+          # Store non-discoverable credentials as discoverable when the
+          # TPM-wrapped key does not fit in the fixed-size credential ID.
+          ./patches/opensk-resident-fallback.patch
         ];
       };
 
