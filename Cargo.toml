@@ -28,3 +28,8 @@ rand = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+
+[features]
+# OpenSK's internal debug output (debug_ctap! lines) through tracing, at debug
+# level: `nix build .#debug`, then RUST_LOG=debug.
+debug_ctap = ["opensk/debug_ctap"]

@@ -29,6 +29,8 @@ impl Clock for RealClock {
 
     #[cfg(feature = "debug_ctap")]
     fn timestamp_us(&mut self) -> usize {
-        Instant::now().elapsed().as_micros() as usize
+        // Microseconds since the first call (process start, in practice).
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_micros() as usize
     }
 }

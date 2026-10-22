@@ -38,8 +38,9 @@
         chmod -R +w $out
       '';
 
-      tpm2-passkey = pkgs.rustPlatform.buildRustPackage {
-        pname = "tpm2-passkey";
+      mkTpm2Passkey = { pname ? "tpm2-passkey", features ? [ ] }: pkgs.rustPlatform.buildRustPackage {
+        inherit pname;
+        buildFeatures = features;
         version = "0.1.0";
         src = buildTree;
         sourceRoot = "tpm2-passkey-tree/crate";
@@ -60,11 +61,17 @@
           platforms = pkgs.lib.platforms.linux;
         };
       };
+      tpm2-passkey = mkTpm2Passkey { };
     in
     {
       packages.${system} = {
         default = tpm2-passkey;
         tpm2-passkey = tpm2-passkey;
+        # With OpenSK's internal debug output (run with RUST_LOG=debug).
+        debug = mkTpm2Passkey {
+          pname = "tpm2-passkey-debug";
+          features = [ "debug_ctap" ];
+        };
       };
 
       # NixOS module (systemd user service) — added in nix/module.nix.

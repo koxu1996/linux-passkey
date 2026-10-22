@@ -69,14 +69,16 @@ impl Persist for AppEnv {
         Ok(self.store.get(key))
     }
     fn insert(&mut self, key: usize, value: &[u8]) -> CtapResult<()> {
-        self.store
-            .insert(key, value.to_vec())
-            .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+        self.store.insert(key, value.to_vec()).map_err(|e| {
+            tracing::error!("store write failed (key {key}): {e:#}");
+            Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR
+        })
     }
     fn remove(&mut self, key: usize) -> CtapResult<()> {
-        self.store
-            .remove(key)
-            .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+        self.store.remove(key).map_err(|e| {
+            tracing::error!("store write failed (remove key {key}): {e:#}");
+            Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR
+        })
     }
     fn iter(&self) -> CtapResult<PersistIter<'_>> {
         Ok(Box::new(self.store.keys().into_iter().map(Ok)))
