@@ -1,11 +1,11 @@
 //! Apple Secure Enclave backend (Apple Silicon Macs running the aurora-silicon
 //! `apple_sep` driver).
 //!
-//! **The device is shared.** `/dev/sep-bio` admits one opener at a time and
-//! fprintd needs it for every fingerprint check, so it is opened per operation
-//! and closed right after (with a short retry while someone else holds it).
+//! **The device.** `/dev/sep-key`, the driver's key-only node: just the two key
+//! ioctls, so this daemon's group gets no access to Touch ID itself
+//! (`/dev/sep-bio`, which fprintd uses).
 //!
-//! **Credential keys.** `SEP_BIO_KEY_CREATE` on `/dev/sep-bio` has the enclave
+//! **Credential keys.** `SEP_BIO_KEY_CREATE` on `/dev/sep-key` has the enclave
 //! create a P-256 key pair and return the public point plus the private key
 //! wrapped by the enclave; `SEP_BIO_KEY_SIGN` signs a digest with such a blob.
 //! The private key never leaves the enclave, and a blob is useless anywhere else.
@@ -65,47 +65,28 @@ const SEP_BIO_KEY_SIGN: u64 = ioc(IOC_RW, 0x0c, std::mem::size_of::<KeySign>());
 
 const KEY_VERSION: u8 = 1;
 
-/// The device path; also serializes our own operations.
-static DEVICE: OnceLock<Mutex<String>> = OnceLock::new();
+static DEVICE: OnceLock<Mutex<File>> = OnceLock::new();
 
-/// How long to wait for the device while someone else (fprintd) holds it.
-const BUSY_RETRIES: u32 = 40;
-const BUSY_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
-
-/// Use the enclave device at `device` (default `/dev/sep-bio`). Call once at
-/// startup; checks it can be opened, then closes it again.
+/// Open the enclave key device (default `/dev/sep-key`). Call once at startup.
 pub fn init(device: &str) -> Result<()> {
-    drop(open_device(device)?);
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(device)
+        .with_context(|| {
+            format!("open {device} (Secure Enclave key device; needs the apple_sep key-ioctls patch and access, e.g. the linux-passkey group)")
+        })?;
     DEVICE
-        .set(Mutex::new(device.to_string()))
+        .set(Mutex::new(f))
         .map_err(|_| anyhow!("Secure Enclave backend already initialized"))
 }
 
-fn open_device(device: &str) -> Result<File> {
-    let mut tries = 0;
-    loop {
-        match std::fs::OpenOptions::new().read(true).write(true).open(device) {
-            Ok(f) => return Ok(f),
-            Err(e) if e.raw_os_error() == Some(libc::EBUSY) && tries < BUSY_RETRIES => {
-                tries += 1;
-                std::thread::sleep(BUSY_WAIT);
-            }
-            Err(e) => {
-                return Err(e).with_context(|| {
-                    format!("open {device} (Secure Enclave; needs access to the device, and fprintd must not be holding it)")
-                })
-            }
-        }
-    }
-}
-
 fn ioctl<T>(request: u64, arg: &mut T) -> Result<()> {
-    let device = DEVICE
+    let dev = DEVICE
         .get()
         .ok_or_else(|| anyhow!("Secure Enclave backend not initialized"))?
         .lock()
         .map_err(|_| anyhow!("Secure Enclave device lock poisoned"))?;
-    let dev = open_device(&device)?; // closed again when it drops, for fprintd
     // SAFETY: `arg` is the #[repr(C)] struct whose size is encoded in `request`.
     let rc = unsafe { libc::ioctl(dev.as_raw_fd(), request as _, arg as *mut T) };
     if rc < 0 {
@@ -454,12 +435,12 @@ mod tests {
     }
 
     /// Real enclave operations, so opt-in: on an Apple Silicon Mac with the
-    /// apple_sep key ioctls, `LINUX_PASSKEY_TEST_SEP=/dev/sep-bio cargo test`
+    /// apple_sep key ioctls, `LINUX_PASSKEY_TEST_SEP=/dev/sep-key cargo test`
     /// (as a user with access to the device).
     #[test]
     fn sep_backend_conformance() {
         let Ok(device) = std::env::var("LINUX_PASSKEY_TEST_SEP") else {
-            eprintln!("skipped: set LINUX_PASSKEY_TEST_SEP=/dev/sep-bio to run");
+            eprintln!("skipped: set LINUX_PASSKEY_TEST_SEP=/dev/sep-key to run");
             return;
         };
         init(&device).expect("open the enclave device");

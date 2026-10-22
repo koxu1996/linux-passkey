@@ -100,7 +100,7 @@ LINUX_PASSKEY_PINENTRY=$(command -v pinentry-qt) ./result/bin/linux-passkey
 | `LINUX_PASSKEY_PINENTRY` | `pinentry` | pinentry binary for the dialog (`pinentry-qt` works under Hyprland; `pinentry-gnome3` silently fails there) |
 | `LINUX_PASSKEY_DATA_DIR` | `~/.local/share/linux-passkey` | credential store |
 | `LINUX_PASSKEY_BACKEND` | `tpm` | hardware behind the keys and the store: `tpm`, or `sep` (Apple Secure Enclave, see below) |
-| `LINUX_PASSKEY_SEP_DEVICE` | `/dev/sep-bio` | Secure Enclave device (`sep` backend) |
+| `LINUX_PASSKEY_SEP_DEVICE` | `/dev/sep-key` | Secure Enclave key device (`sep` backend) |
 | `LINUX_PASSKEY_UV` | `pinentry` | how requests are approved: `pinentry` (the dialog), or `fprintd` (the dialog, then a fingerprint check) |
 | `LINUX_PASSKEY_FPRINTD_VERIFY` | `fprintd-verify` | fprintd client used for the fingerprint check |
 | `LINUX_PASSKEY_TCTI` | `device:/dev/tpmrm0` | TPM; use `swtpm:…` for a software TPM |
@@ -144,15 +144,15 @@ encrypted inside the kernel, so the AES key never enters the daemon.
 
 Requires the aurora-silicon `apple_sep` driver (Touch ID working, xART writes
 on, `trusted.source=applesep`) plus the `SEP_BIO_KEY_CREATE`/`SEP_BIO_KEY_SIGN`
-ioctls, currently a patch on top of it:
+ioctls on the driver's key-only node `/dev/sep-key` (Touch ID itself stays on
+root-only `/dev/sep-bio`), currently a patch on top of it:
 [apple-sep-key-ioctls.patch](https://gitlab.com/andrzej1_1/nixos-config/-/blob/master/hosts/nixAir/touchid/apple-sep-key-ioctls.patch).
 Tested on a MacBook Air M2 (J413) with webauthn.io. Only ES256, like the TPM
 backend.
 
 With `LINUX_PASSKEY_UV=fprintd` every registration and sign-in is the dialog
 (site and account), then the fingerprint, matched inside the enclave by the
-same Touch ID stack `sudo` uses. `/dev/sep-bio` admits one opener at a time and
-fprintd needs it for the match, so the backend opens it only per operation.
+same Touch ID stack `sudo` uses.
 
 ## Managing passkeys
 
@@ -323,7 +323,7 @@ LINUX_PASSKEY_TEST_TCTI=swtpm:host=localhost,port=2321 cargo test
 ```
 
 On an Apple Silicon Mac with the Secure Enclave key ioctls (see below):
-`LINUX_PASSKEY_TEST_SEP=/dev/sep-bio cargo test sep_backend_conformance`
+`LINUX_PASSKEY_TEST_SEP=/dev/sep-key cargo test sep_backend_conformance`
 (as a user with access to the device).
 
 ## License

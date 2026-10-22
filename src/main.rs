@@ -48,7 +48,7 @@ ENVIRONMENT:
   LINUX_PASSKEY_TCTI       TPM (default device:/dev/tpmrm0)
   LINUX_PASSKEY_PINENTRY   pinentry binary for the confirm dialog
   LINUX_PASSKEY_BACKEND    hardware behind the keys: tpm (default) or sep
-  LINUX_PASSKEY_SEP_DEVICE Secure Enclave device (default /dev/sep-bio)
+  LINUX_PASSKEY_SEP_DEVICE Secure Enclave key device (default /dev/sep-key)
   LINUX_PASSKEY_UV         approval: pinentry (dialog, default) or fprintd (dialog, then finger)
   LINUX_PASSKEY_FPRINTD_VERIFY  fprintd-verify binary (default fprintd-verify)";
 
@@ -129,7 +129,7 @@ fn main() -> Result<()> {
             backend::init(Box::new(tpm::TpmBackend))?;
         }
         "sep" => {
-            let device = env_var("SEP_DEVICE").unwrap_or_else(|| "/dev/sep-bio".into());
+            let device = env_var("SEP_DEVICE").unwrap_or_else(|| "/dev/sep-key".into());
             sep::init(&device)?;
             backend::init(Box::new(sep::SepBackend))?;
         }
