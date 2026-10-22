@@ -983,7 +983,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tpm2-passkey"
+name = "linux-passkey"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",

@@ -1,7 +1,7 @@
 # passkey-platform-shim
 
 A tiny unpacked browser extension (Brave/Chromium, MV3) that lets **Google**
-create a passkey on a USB/virtual FIDO2 key (tpm2-passkey) on Linux.
+create a passkey on a USB/virtual FIDO2 key (linux-passkey) on Linux.
 
 **Problem.** Before it starts, Google's passkey page calls
 `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`. Linux

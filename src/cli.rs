@@ -1,4 +1,4 @@
-//! Local credential management: `tpm2-passkey list` / `tpm2-passkey delete`.
+//! Local credential management: `linux-passkey list` / `linux-passkey delete`.
 //!
 //! CTAP's own credential management (browser settings, `fido2-token -L`) needs
 //! a pinUvAuthToken, i.e. a clientPIN, which this authenticator deliberately

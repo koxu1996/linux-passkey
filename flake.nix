@@ -1,5 +1,5 @@
 {
-  description = "tpm2-passkey — a TPM 2.0-backed FIDO2/CTAP2 authenticator for Linux";
+  description = "linux-passkey — a TPM 2.0-backed FIDO2/CTAP2 authenticator for Linux";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -31,19 +31,19 @@
 
       # Replicate the dev layout (crate + sibling OpenSK) so the Cargo.toml path
       # dependency `../OpenSK/libraries/opensk` resolves in the build sandbox.
-      buildTree = pkgs.runCommand "tpm2-passkey-tree" { } ''
+      buildTree = pkgs.runCommand "linux-passkey-tree" { } ''
         mkdir -p $out/crate $out/OpenSK
         cp -r ${self}/. $out/crate/
         cp -r ${patchedOpenSK}/. $out/OpenSK/
         chmod -R +w $out
       '';
 
-      mkTpm2Passkey = { pname ? "tpm2-passkey", features ? [ ] }: pkgs.rustPlatform.buildRustPackage {
+      mkLinuxPasskey = { pname ? "linux-passkey", features ? [ ] }: pkgs.rustPlatform.buildRustPackage {
         inherit pname;
         buildFeatures = features;
         version = "0.1.0";
         src = buildTree;
-        sourceRoot = "tpm2-passkey-tree/crate";
+        sourceRoot = "linux-passkey-tree/crate";
         cargoLock.lockFile = ./Cargo.lock;
         nativeBuildInputs = [
           pkgs.pkg-config
@@ -57,28 +57,33 @@
         meta = {
           description = "TPM 2.0-backed FIDO2/CTAP2 authenticator for Linux";
           license = pkgs.lib.licenses.asl20;
-          mainProgram = "tpm2-passkey";
+          mainProgram = "linux-passkey";
           platforms = pkgs.lib.platforms.linux;
         };
       };
-      tpm2-passkey = mkTpm2Passkey { };
+      linux-passkey = mkLinuxPasskey { };
+      linuxPasskeyTests = (mkLinuxPasskey { pname = "linux-passkey-tests"; }).overrideAttrs { doCheck = true; };
     in
     {
       packages.${system} = {
-        default = tpm2-passkey;
-        tpm2-passkey = tpm2-passkey;
+        default = linux-passkey;
+        linux-passkey = linux-passkey;
         # With OpenSK's internal debug output (run with RUST_LOG=debug).
-        debug = mkTpm2Passkey {
-          pname = "tpm2-passkey-debug";
+        debug = mkLinuxPasskey {
+          pname = "linux-passkey-debug";
           features = [ "debug_ctap" ];
         };
       };
+
+      # `nix flake check`: build + unit tests (request parsing, prompts). The
+      # tests need no TPM; the package itself skips them (doCheck = false).
+      checks.${system}.tests = linuxPasskeyTests;
 
       # NixOS module (systemd user service) — added in nix/module.nix.
       nixosModules.default = import ./nix/module.nix self;
 
       devShells.${system}.default = pkgs.mkShell {
-        name = "tpm2-passkey-dev";
+        name = "linux-passkey-dev";
         nativeBuildInputs = with pkgs; [
           rustc
           cargo
@@ -92,7 +97,7 @@
         packages = with pkgs; [ swtpm libtpms tpm2-tools ];
         LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         shellHook = ''
-          echo "tpm2-passkey dev shell (rustc $(rustc --version 2>/dev/null | awk '{print $2}'), tpm2-tss ${pkgs.tpm2-tss.version})"
+          echo "linux-passkey dev shell (rustc $(rustc --version 2>/dev/null | awk '{print $2}'), tpm2-tss ${pkgs.tpm2-tss.version})"
         '';
       };
     };

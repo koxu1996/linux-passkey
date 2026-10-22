@@ -14,6 +14,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 /// The fixed template id for our single "enrolled finger".
+// Kept from the tpm2-passkey days: it is stored in existing passkey stores.
 pub const TEMPLATE_ID: &[u8] = b"tpm2-passkey-uv";
 
 pub struct PinentryFingerprint {

@@ -1,4 +1,4 @@
-# tpm2-passkey
+# linux-passkey
 
 A **TPM 2.0-backed FIDO2/CTAP2 passkey authenticator for Linux**, in Rust.
 
@@ -10,11 +10,19 @@ the touch and the PIN.
 Works today with **webauthn.io** and **Google** (passwordless sign-in), from
 Brave/Chromium.
 
+> **Renamed from `tpm2-passkey`** (more backends are coming: Apple Secure
+> Enclave on Apple Silicon Linux is in progress). On first start the daemon
+> copies an existing store from `~/.local/share/tpm2-passkey` to
+> `~/.local/share/linux-passkey` and leaves the old copy in place;
+> `TPM2_PASSKEY_*` variables and `services.tpm2-passkey` still work as aliases.
+> On impermanence systems, persist the new directory **before** switching, or
+> keep the old one persisted until the first start has copied it.
+
 ```
 browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid)
                               │ CTAPHID
                               ▼
-                     tpm2-passkey daemon
+                     linux-passkey daemon
               ┌───────────────┼─────────────────────────┐
               ▼               ▼                         ▼
        OpenSK CTAP2 core   TPM (tss-esapi)          pinentry-qt
@@ -22,7 +30,7 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
         patches)           signed in the TPM;       user presence + user
               │            store key TPM-sealed     verification
               ▼
-   ~/.local/share/tpm2-passkey/  (AES-256-GCM store; key sealed to the TPM)
+   ~/.local/share/linux-passkey/  (AES-256-GCM store; key sealed to the TPM)
 ```
 
 ## Why
@@ -32,7 +40,7 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
 | `tpm-fido` | TPM-backed U2F | CTAP1/**U2F only**: no passkeys, sites say "your device can't be used" |
 | `libwebauthn` / `credentialsd` | Linux platform-authenticator plumbing | TPM authenticator planned, not built |
 | Password-manager passkeys (KeePassXC, …) | software passkeys | key is a file you can copy |
-| **tpm2-passkey** | CTAP 2.1 passkeys, keys in the TPM | — |
+| **linux-passkey** | CTAP 2.1 passkeys, keys in the TPM | — |
 
 ## Features
 
@@ -69,7 +77,7 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
 Nix (recommended; fetches and patches OpenSK itself):
 
 ```sh
-nix build            # → ./result/bin/tpm2-passkey
+nix build            # → ./result/bin/linux-passkey
 ```
 
 Cargo, for development: needs `../OpenSK` next to this repo (Google's OpenSK at
@@ -84,15 +92,15 @@ nix develop -c cargo test
 Run in your graphical session (the dialog needs the display):
 
 ```sh
-TPM2_PASSKEY_PINENTRY=$(command -v pinentry-qt) ./result/bin/tpm2-passkey
+LINUX_PASSKEY_PINENTRY=$(command -v pinentry-qt) ./result/bin/linux-passkey
 ```
 
 | Variable | Default | |
 |---|---|---|
-| `TPM2_PASSKEY_PINENTRY` | `pinentry` | pinentry binary for the dialog (`pinentry-qt` works under Hyprland; `pinentry-gnome3` silently fails there) |
-| `TPM2_PASSKEY_DATA_DIR` | `~/.local/share/tpm2-passkey` | credential store |
-| `TPM2_PASSKEY_TCTI` | `device:/dev/tpmrm0` | TPM; use `swtpm:…` for a software TPM |
-| `RUST_LOG` | `info` | `tpm2_passkey::request=debug` logs every request (op, site, user, UV) |
+| `LINUX_PASSKEY_PINENTRY` | `pinentry` | pinentry binary for the dialog (`pinentry-qt` works under Hyprland; `pinentry-gnome3` silently fails there) |
+| `LINUX_PASSKEY_DATA_DIR` | `~/.local/share/linux-passkey` | credential store |
+| `LINUX_PASSKEY_TCTI` | `device:/dev/tpmrm0` | TPM; use `swtpm:…` for a software TPM |
+| `RUST_LOG` | `info` | `linux_passkey::request=debug` logs every request (op, site, user, UV) |
 
 Requirements: a TPM 2.0 (Intel PTT / AMD fTPM enabled in firmware), access to
 `/dev/tpmrm0` (`tss` group) and `/dev/uhid` (see the module's udev rule), and
@@ -102,12 +110,12 @@ the `uhid` kernel module.
 
 ```nix
 # flake.nix
-inputs.tpm2-passkey.url = "github:koxu1996/tpm2-passkey";
-inputs.tpm2-passkey.inputs.nixpkgs.follows = "nixpkgs";
+inputs.linux-passkey.url = "github:koxu1996/linux-passkey";
+inputs.linux-passkey.inputs.nixpkgs.follows = "nixpkgs";
 
 # in your NixOS configuration
-imports = [ tpm2-passkey.nixosModules.default ];
-services.tpm2-passkey = { enable = true; user = "you"; };
+imports = [ linux-passkey.nixosModules.default ];
+services.linux-passkey = { enable = true; user = "you"; };
 ```
 
 This enables the TPM stack, loads `uhid`, adds the udev rule and the `tss`
@@ -116,7 +124,7 @@ It stays inert until `/dev/tpmrm0` exists.
 
 > **Impermanence / ephemeral home:** persist the store directory, or every
 > reboot wipes your passkeys:
-> `users.<you>.directories = [ ".local/share/tpm2-passkey" ];`
+> `users.<you>.directories = [ ".local/share/linux-passkey" ];`
 
 > **Don't run `tpm-fido` alongside it.** The browser sends every request to
 > every key, so you get two dialogs, and tpm-fido (U2F-only) is what triggers
@@ -125,11 +133,11 @@ It stays inert until `/dev/tpmrm0` exists.
 ## Managing passkeys
 
 ```sh
-tpm2-passkey list                    # all passkeys, oldest first
-tpm2-passkey list --rp webauthn.io
-tpm2-passkey delete c99c38e8         # by id prefix from `list` (asks first)
-tpm2-passkey delete --rp webauthn.io --keep-newest
-tpm2-passkey delete --yes …          # no confirmation
+linux-passkey list                    # all passkeys, oldest first
+linux-passkey list --rp webauthn.io
+linux-passkey delete c99c38e8         # by id prefix from `list` (asks first)
+linux-passkey delete --rp webauthn.io --keep-newest
+linux-passkey delete --yes …          # no confirmation
 ```
 
 ```
@@ -234,7 +242,7 @@ Applied by the flake (`patches/`) on top of OpenSK `a93efdb`:
 | `src/fingerprint.rs` | built-in UV = pinentry Confirm (one enrolled "template") |
 | `src/request.rs` | CTAPHID reassembly + CBOR peek: dialog wording, duplicate detection |
 | `src/cli.rs` | `list` / `delete` |
-| `nix/module.nix` | `services.tpm2-passkey` |
+| `nix/module.nix` | `services.linux-passkey` |
 | `browser/passkey-platform-shim/` | Google passkey-creation shim (extension) |
 
 ## Troubleshooting
@@ -247,12 +255,12 @@ Applied by the flake (`patches/`) on top of OpenSK `a93efdb`:
 | Google: "Your key requires a password … 2-Step Verification only" | enrolled via "another device", or before the UV patch; delete it in 2SV settings and re-create via the shim |
 | "store … is in use" | daemon running; stop it for `delete`, or don't start a second daemon |
 | Passkeys gone after reboot | store dir not persisted (impermanence) |
-| No dialog appears | wrong `TPM2_PASSKEY_PINENTRY`, or no `WAYLAND_DISPLAY`/`DISPLAY` in the daemon's environment |
+| No dialog appears | wrong `LINUX_PASSKEY_PINENTRY`, or no `WAYLAND_DISPLAY`/`DISPLAY` in the daemon's environment |
 
 Inspect what the key advertises:
 
 ```sh
-nix shell nixpkgs#libfido2 -c fido2-token -I /dev/hidrawN   # N: grep tpm2-passkey /sys/class/hidraw/*/device/uevent
+nix shell nixpkgs#libfido2 -c fido2-token -I /dev/hidrawN   # N: grep linux-passkey /sys/class/hidraw/*/device/uevent
 # expect: FIDO_2_1 … options: rk, up, uv, noclientPin, nopinUvAuthToken, nomakeCredUvNotRqd
 ```
 
@@ -260,7 +268,7 @@ nix shell nixpkgs#libfido2 -c fido2-token -I /dev/hidrawN   # N: grep tpm2-passk
 
 Use a software TPM (`swtpm`) so the real one is never touched. `nix develop`
 provides Rust, tpm2-tss, swtpm and tpm2-tools; then set
-`TPM2_PASSKEY_TCTI=swtpm:…` and a scratch `TPM2_PASSKEY_DATA_DIR`.
+`LINUX_PASSKEY_TCTI=swtpm:…` and a scratch `LINUX_PASSKEY_DATA_DIR`.
 
 `cargo test` covers request parsing: multi-packet reassembly, excludeList/UV
 parsing, dialog wording, and text cleaning.

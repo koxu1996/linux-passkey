@@ -41,7 +41,7 @@ impl UhidConnection {
             .write(true)
             .open("/dev/uhid")?;
         let params = CreateParams {
-            name: String::from("tpm2-passkey FIDO2"),
+            name: String::from("linux-passkey FIDO2"),
             phys: String::new(),
             uniq: String::new(),
             bus: Bus::USB,

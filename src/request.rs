@@ -288,7 +288,7 @@ impl Prompt {
         };
         match req {
             Some(Request::Register { rp, user, existing: true, .. }) => p(
-                "tpm2-passkey — Already registered",
+                "linux-passkey — Already registered",
                 match user {
                     Some(u) => format!(
                         "{} already has a passkey from this device for \"{}\". \
@@ -305,7 +305,7 @@ impl Prompt {
                 "OK",
             ),
             Some(Request::Register { rp, user, .. }) => p(
-                "tpm2-passkey — Register",
+                "linux-passkey — Register",
                 match user {
                     Some(u) => format!(
                         "Create a passkey for {} as \"{}\"?",
@@ -317,32 +317,32 @@ impl Prompt {
                 "Register",
             ),
             Some(Request::SignIn { rp }) => p(
-                "tpm2-passkey — Sign in",
+                "linux-passkey — Sign in",
                 format!("Sign in to {} with your passkey?", clean(rp)),
                 "Sign in",
             ),
             Some(Request::Reset) => p(
-                "tpm2-passkey — RESET",
+                "linux-passkey — RESET",
                 "Reset the authenticator? This permanently deletes ALL passkeys.".to_string(),
                 "Reset",
             ),
             Some(Request::Select) => p(
-                "tpm2-passkey",
+                "linux-passkey",
                 "Use this TPM passkey authenticator?".to_string(),
                 "Select",
             ),
             Some(Request::U2fRegister) => p(
-                "tpm2-passkey — Register (U2F)",
+                "linux-passkey — Register (U2F)",
                 "Register this security key with a site (legacy U2F)?".to_string(),
                 "Register",
             ),
             Some(Request::U2fSignIn) => p(
-                "tpm2-passkey — Sign in (U2F)",
+                "linux-passkey — Sign in (U2F)",
                 "Sign in with this security key (legacy U2F)?".to_string(),
                 "Sign in",
             ),
             Some(Request::Other) | None => p(
-                "tpm2-passkey",
+                "linux-passkey",
                 "Confirm use of your TPM-backed passkey?".to_string(),
                 "Confirm",
             ),

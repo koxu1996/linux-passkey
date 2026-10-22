@@ -17,7 +17,7 @@
   }
 
   // 2. Don't let the request insist on a platform authenticator, so the
-  //    browser offers the USB security key (our tpm2-passkey).
+  //    browser offers the USB security key (our linux-passkey).
   const create = navigator.credentials.create.bind(navigator.credentials);
   navigator.credentials.create = async (options) => {
     const pk = options && options.publicKey;

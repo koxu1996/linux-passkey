@@ -1,11 +1,16 @@
 self:
 { config, lib, pkgs, ... }:
 let
-  cfg = config.services.tpm2-passkey;
+  cfg = config.services.linux-passkey;
   pkg = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
 in
 {
-  options.services.tpm2-passkey = {
+  # Renamed from tpm2-passkey.
+  imports = [
+    (lib.mkRenamedOptionModule [ "services" "tpm2-passkey" ] [ "services" "linux-passkey" ])
+  ];
+
+  options.services.linux-passkey = {
     enable = lib.mkEnableOption "TPM 2.0-backed FIDO2 passkey authenticator";
 
     user = lib.mkOption {
@@ -41,8 +46,8 @@ in
 
     # Runs in the user's graphical session (pinentry needs the display). Inert
     # until /dev/tpmrm0 exists (so it won't crash-loop before PTT is enabled).
-    systemd.user.services.tpm2-passkey = {
-      description = "tpm2-passkey — TPM-backed FIDO2/CTAP2 authenticator";
+    systemd.user.services.linux-passkey = {
+      description = "linux-passkey — TPM-backed FIDO2/CTAP2 authenticator";
       wantedBy = [ "graphical-session.target" ];
       after = [ "graphical-session.target" ];
       partOf = [ "graphical-session.target" ];
@@ -50,7 +55,7 @@ in
       serviceConfig = {
         ExecStart = "${lib.getExe pkg}";
         Environment = [
-          "TPM2_PASSKEY_PINENTRY=${cfg.pinentry}/bin/${cfg.pinentryProgram}"
+          "LINUX_PASSKEY_PINENTRY=${cfg.pinentry}/bin/${cfg.pinentryProgram}"
           "RUST_LOG=info"
         ];
         Restart = "on-failure";
@@ -60,6 +65,6 @@ in
 
     # NOTE: on an impermanence system, add the store dir to /persist so passkeys
     # survive the root rollback, e.g. in persist.nix:
-    #   users.andrew.directories = [ ".local/share/tpm2-passkey" ];
+    #   users.andrew.directories = [ ".local/share/linux-passkey" ];
   };
 }

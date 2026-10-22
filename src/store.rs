@@ -33,7 +33,7 @@ impl FileStore {
             let f = std::fs::File::create(dir.join("lock"))?;
             f.try_lock().map_err(|_| {
                 anyhow!(
-                    "store {} is in use (is the tpm2-passkey daemon running? stop it first)",
+                    "store {} is in use (is the linux-passkey daemon running? stop it first)",
                     dir.display()
                 )
             })?;
