@@ -2,11 +2,15 @@
 // M1: real uhid transport + pinentry user-presence + software crypto.
 // Loop: recv a 64-byte HID report -> ctap.process_hid_packet -> send outputs.
 
+// sk-cbor's macros expand to `::alloc::…` paths.
+extern crate alloc;
+
 mod clock;
 mod crypto;
 mod env;
 mod fingerprint;
 mod presence;
+mod request;
 mod rng;
 mod store;
 mod tpm;
@@ -68,9 +72,12 @@ fn main() -> Result<()> {
     }
 
     let mut buf = [0u8; 64];
+    let mut requests = request::Reassembler::default();
     loop {
         match ctap.env().hid_connection().recv(&mut buf, 60_000) {
             Ok(RecvStatus::Received(_endpoint)) => {
+                // Note what is being asked (op + site) for the confirm prompt.
+                requests.feed(&buf);
                 let out = ctap.process_hid_packet(&buf, Transport::MainHid);
                 // Collect to drop the &mut ctap borrow before sending.
                 let packets: Vec<_> = out.collect();

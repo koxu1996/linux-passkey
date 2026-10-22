@@ -54,8 +54,9 @@ impl Fingerprint for PinentryFingerprint {
     fn check_fingerprint_init(&mut self) -> CtapResult<()> {
         let (tx, rx) = mpsc::channel();
         let bin = self.pinentry_bin.clone();
+        let prompt = crate::request::Prompt::for_request(crate::request::current().as_ref());
         std::thread::spawn(move || {
-            let _ = tx.send(crate::presence::pinentry_confirm(&bin));
+            let _ = tx.send(crate::presence::pinentry_confirm(&bin, &prompt));
         });
         self.pending = Some(rx);
         Ok(())

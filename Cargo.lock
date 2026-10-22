@@ -992,6 +992,7 @@ dependencies = [
  "pinentry",
  "rand",
  "sha2",
+ "sk-cbor",
  "tracing",
  "tracing-subscriber",
  "tss-esapi",

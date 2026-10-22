@@ -10,6 +10,8 @@ description = "A TPM 2.0-backed FIDO2/CTAP2 authenticator for Linux (built on Op
 # "fingerprint" = OpenSK's built-in user-verification path; we back it with a
 # pinentry confirm so the browser never asks for a clientPIN.
 opensk = { path = "../OpenSK/libraries/opensk", features = ["std", "fingerprint"] }
+# OpenSK's CBOR codec: peek at requests to word the confirm prompt.
+sk-cbor = { path = "../OpenSK/libraries/cbor" }
 # Virtual USB-HID device via /dev/uhid.
 uhid-virt = "0.0.8"
 # pinentry popup for user presence/verification (same flavor gpg-agent uses).

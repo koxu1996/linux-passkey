@@ -13,6 +13,7 @@ use opensk::api::connection::RecvStatus;
 use opensk::api::user_presence::{
     UserPresence, UserPresenceError, UserPresenceWaitResult,
 };
+use crate::request::{self, Prompt};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
@@ -34,8 +35,9 @@ impl UserPresence for PinentryPresence {
     fn check_init(&mut self) {
         let (tx, rx) = mpsc::channel();
         let bin = self.pinentry_bin.clone();
+        let prompt = Prompt::for_request(request::current().as_ref());
         std::thread::spawn(move || {
-            let _ = tx.send(pinentry_confirm(&bin));
+            let _ = tx.send(pinentry_confirm(&bin, &prompt));
         });
         self.pending = Some(rx);
     }
@@ -63,8 +65,9 @@ impl UserPresence for PinentryPresence {
 }
 
 /// Show a pinentry Confirm/Deny dialog; returns true if confirmed. Shared by
-/// user presence (here) and the fingerprint-backed user verification.
-pub fn pinentry_confirm(bin: &str) -> bool {
+/// user presence (here) and the fingerprint-backed user verification. The
+/// wording names the operation and site of the request being processed.
+pub fn pinentry_confirm(bin: &str, prompt: &Prompt) -> bool {
     use pinentry::ConfirmationDialog;
     match ConfirmationDialog::with_binary(bin) {
         None => {
@@ -73,13 +76,10 @@ pub fn pinentry_confirm(bin: &str) -> bool {
         }
         Some(mut dialog) => {
             dialog
-                .with_title("tpm2-passkey")
-                .with_ok("Confirm")
+                .with_title(&prompt.title)
+                .with_ok(&prompt.ok)
                 .with_cancel("Deny");
-            matches!(
-                dialog.confirm("Confirm use of your TPM-backed passkey?"),
-                Ok(true)
-            )
+            matches!(dialog.confirm(&prompt.description), Ok(true))
         }
     }
 }
