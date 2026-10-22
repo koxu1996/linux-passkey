@@ -101,9 +101,13 @@ the `uhid` kernel module.
 ### NixOS module
 
 ```nix
-# flake input:  tpm2-passkey.url = "path:/home/you/…/tpm2-passkey";
+# flake.nix
+inputs.tpm2-passkey.url = "github:koxu1996/tpm2-passkey";
+inputs.tpm2-passkey.inputs.nixpkgs.follows = "nixpkgs";
+
+# in your NixOS configuration
 imports = [ tpm2-passkey.nixosModules.default ];
-services.tpm2-passkey = { enable = true; user = "andrew"; };
+services.tpm2-passkey = { enable = true; user = "you"; };
 ```
 
 This enables the TPM stack, loads `uhid`, adds the udev rule and the `tss`
