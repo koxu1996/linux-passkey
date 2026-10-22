@@ -1,10 +1,10 @@
 // tpm2-passkey — a FIDO2/CTAP2 authenticator daemon built on OpenSK.
-// M1: real uhid transport + pinentry user-presence + software crypto.
 // Loop: recv a 64-byte HID report -> ctap.process_hid_packet -> send outputs.
 
 // sk-cbor's macros expand to `::alloc::…` paths.
 extern crate alloc;
 
+mod cli;
 mod clock;
 mod crypto;
 mod env;
@@ -25,6 +25,21 @@ use opensk::env::Env;
 use env::AppEnv;
 use uhid::UhidConnection;
 
+const USAGE: &str = "\
+tpm2-passkey — TPM 2.0-backed FIDO2/CTAP2 authenticator
+
+USAGE:
+  tpm2-passkey [serve]                 run the authenticator (virtual USB key)
+  tpm2-passkey list [--rp SITE]        list stored passkeys
+  tpm2-passkey delete [--yes] ID-PREFIX...
+  tpm2-passkey delete [--yes] --rp SITE [--keep-newest]
+                                       delete passkeys (daemon must be stopped)
+
+ENVIRONMENT:
+  TPM2_PASSKEY_DATA_DIR   store dir (default ~/.local/share/tpm2-passkey)
+  TPM2_PASSKEY_TCTI       TPM (default device:/dev/tpmrm0)
+  TPM2_PASSKEY_PINENTRY   pinentry binary for the confirm dialog";
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -44,13 +59,38 @@ fn main() -> Result<()> {
             std::path::PathBuf::from(home).join(".local/share/tpm2-passkey")
         });
 
-    tracing::info!("tpm2-passkey starting (OpenSK core, TPM-backed keys + sealed store — M3)");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let command = args.first().map(String::as_str).unwrap_or("serve");
+    if matches!(command, "-h" | "--help" | "help") {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    if !matches!(command, "serve" | "list" | "delete") {
+        anyhow::bail!("unknown command '{command}'\n\n{USAGE}");
+    }
+
     tpm::init(&tcti)?;
+    match command {
+        "list" => {
+            let rp = match args.get(1).map(String::as_str) {
+                Some("--rp") => Some(args.get(2).map(String::as_str).ok_or_else(|| anyhow::anyhow!("--rp needs a site"))?),
+                Some(other) => anyhow::bail!("unknown option {other}"),
+                None => None,
+            };
+            return cli::list(data_dir, rp);
+        }
+        "delete" => return cli::delete(data_dir, &args[1..]),
+        _ => {}
+    }
+
+    tracing::info!("tpm2-passkey starting (OpenSK core, TPM-backed keys + sealed store)");
     tracing::info!("TPM backend ready ({tcti})");
-    let hid = UhidConnection::create()?;
+    // Take the store lock before creating the device, so a second daemon
+    // fails cleanly instead of fighting over the same store.
+    let env = AppEnv::new(UhidConnection::detached(), pinentry_bin, data_dir, true)?;
+    let env = env.with_hid(UhidConnection::create()?);
     tracing::info!("uhid FIDO2 device created; waiting for the host");
 
-    let env = AppEnv::new(hid, pinentry_bin, data_dir)?;
     let mut ctap = Ctap::new(env);
 
     // Enroll one built-in-UV "template" so the authenticator advertises uv:true

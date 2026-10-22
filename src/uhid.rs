@@ -30,7 +30,8 @@ pub const FIDO_HID_REPORT_DESCRIPTOR: &[u8] = &[
 ];
 
 pub struct UhidConnection {
-    file: File,
+    /// None for CLI commands, which need an Env but no virtual device.
+    file: Option<File>,
 }
 
 impl UhidConnection {
@@ -52,7 +53,12 @@ impl UhidConnection {
         };
         let event: [u8; UHID_EVENT_SIZE] = InputEvent::Create(params).into();
         file.write_all(&event)?;
-        Ok(UhidConnection { file })
+        Ok(UhidConnection { file: Some(file) })
+    }
+
+    /// A connection with no device behind it (send/recv fail).
+    pub fn detached() -> Self {
+        UhidConnection { file: None }
     }
 }
 
@@ -63,16 +69,18 @@ fn hw_err() -> Ctap2StatusCode {
 impl HidConnection for UhidConnection {
     fn send(&mut self, buf: &[u8; 64], _endpoint: UsbEndpoint) -> CtapResult<()> {
         let event: [u8; UHID_EVENT_SIZE] = InputEvent::Input { data: buf }.into();
-        self.file.write_all(&event).map_err(|_| hw_err())
+        let file = self.file.as_mut().ok_or_else(hw_err)?;
+        file.write_all(&event).map_err(|_| hw_err())
     }
 
     /// Block reading uhid events until the host sends a data OUTPUT report.
     /// (The CTAP core only calls this from our main loop; control events are
     /// handled internally. `timeout_ms` is ignored — we block for the next cmd.)
     fn recv(&mut self, buf: &mut [u8; 64], _timeout_ms: usize) -> CtapResult<RecvStatus> {
+        let file = self.file.as_mut().ok_or_else(hw_err)?;
         let mut event = [0u8; UHID_EVENT_SIZE];
         loop {
-            self.file.read_exact(&mut event).map_err(|_| hw_err())?;
+            file.read_exact(&mut event).map_err(|_| hw_err())?;
             match OutputEvent::try_from(event) {
                 Ok(OutputEvent::Output { data }) => {
                     // hidraw may prepend a report-ID byte (0x00); strip it.

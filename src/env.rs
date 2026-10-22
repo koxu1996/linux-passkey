@@ -37,7 +37,14 @@ pub struct AppEnv {
 }
 
 impl AppEnv {
-    pub fn new(hid: UhidConnection, pinentry_bin: String, data_dir: PathBuf) -> anyhow::Result<Self> {
+    /// `writer`: hold the store's exclusive lock (daemon, `delete`); false for
+    /// read-only CLI use alongside a running daemon (`list`).
+    pub fn new(
+        hid: UhidConnection,
+        pinentry_bin: String,
+        data_dir: PathBuf,
+        writer: bool,
+    ) -> anyhow::Result<Self> {
         Ok(AppEnv {
             rng: AppRng::new(),
             user_presence: PinentryPresence::new(pinentry_bin.clone()),
@@ -45,8 +52,14 @@ impl AppEnv {
             hid,
             clock: RealClock,
             customization: DEFAULT_CUSTOMIZATION,
-            store: FileStore::open(data_dir)?,
+            store: FileStore::open(data_dir, writer)?,
         })
+    }
+
+    /// Attach the real device (the store is opened first, see main).
+    pub fn with_hid(mut self, hid: UhidConnection) -> Self {
+        self.hid = hid;
+        self
     }
 }
 

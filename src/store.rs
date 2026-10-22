@@ -17,13 +17,30 @@ pub struct FileStore {
     dir: PathBuf,
     aes_key: [u8; 32],
     map: BTreeMap<usize, Vec<u8>>,
+    /// Exclusive lock on `dir/lock` for writers (the daemon, `delete`): the
+    /// daemon keeps the map in memory and rewrites the whole file, so a second
+    /// writer's changes would be silently lost. None for read-only opens.
+    _lock: Option<std::fs::File>,
 }
 
 impl FileStore {
     /// Open (or initialize) the store in `dir`. Creates+seals a fresh AES key on
     /// first run; otherwise unseals it and decrypts the existing store.
-    pub fn open(dir: PathBuf) -> Result<Self> {
+    /// `writer` takes the exclusive lock and fails if another writer holds it.
+    pub fn open(dir: PathBuf, writer: bool) -> Result<Self> {
         std::fs::create_dir_all(&dir)?;
+        let lock = if writer {
+            let f = std::fs::File::create(dir.join("lock"))?;
+            f.try_lock().map_err(|_| {
+                anyhow!(
+                    "store {} is in use (is the tpm2-passkey daemon running? stop it first)",
+                    dir.display()
+                )
+            })?;
+            Some(f)
+        } else {
+            None
+        };
 
         let seal_path = dir.join("seal.blob");
         let aes_key = if seal_path.exists() {
@@ -46,10 +63,13 @@ impl FileStore {
             BTreeMap::new()
         };
 
-        Ok(FileStore { dir, aes_key, map })
+        Ok(FileStore { dir, aes_key, map, _lock: lock })
     }
 
     fn persist(&self) -> Result<()> {
+        if self._lock.is_none() {
+            return Err(anyhow!("store opened read-only"));
+        }
         let data = encrypt(&self.aes_key, &serialize(&self.map))?;
         let tmp = self.dir.join("store.enc.tmp");
         std::fs::write(&tmp, &data)?;
