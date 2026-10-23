@@ -1,8 +1,8 @@
 diff --git a/libraries/opensk/src/ctap/mod.rs b/libraries/opensk/src/ctap/mod.rs
-index a36d421..2ecc927 100644
+index 5c48526..361a54d 100644
 --- a/libraries/opensk/src/ctap/mod.rs
 +++ b/libraries/opensk/src/ctap/mod.rs
-@@ -1347,14 +1347,16 @@ impl<E: Env> CtapState<E> {
+@@ -1383,14 +1383,17 @@ impl<E: Env> CtapState<E> {
          if !has_always_uv {
              versions.insert(0, String::from(U2F_VERSION_STRING))
          }
@@ -16,10 +16,11 @@ index a36d421..2ecc927 100644
 +            (String::from("clientPin"), has_pin),
              (String::from("up"), true),
 -            (String::from("pinUvAuthToken"), true),
-+            // Only advertise pinUvAuthToken when a clientPIN is set. Without this,
-+            // platforms prefer the token path, which OpenSK's makeCredential
-+            // requires a PIN for (CTAP2.0 logic). Dropping it when PIN-less forces
-+            // the legacy `options.uv` path -> built-in UV (our pinentry), no PIN.
++            // Without a clientPIN, hide pinUvAuthToken so platforms send
++            // `options.uv` in makeCredential/getAssertion instead of fetching a
++            // token first. Built-in UV (our dialog) then sees the whole request:
++            // it can name the account and spot an already-registered one before
++            // asking, like Windows Hello or Touch ID.
 +            (String::from("pinUvAuthToken"), has_pin),
              (String::from("largeBlobs"), true),
              #[cfg(feature = "config_command")]

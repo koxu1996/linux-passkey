@@ -182,6 +182,7 @@ fn classify(cmd: u8, data: &[u8]) -> Option<Request> {
                 0x01 => Some(make_credential(body).unwrap_or(Request::Other)),
                 0x02 => Some(get_assertion(body).unwrap_or(Request::Other)),
                 0x04 => None, // getInfo
+                0x06 => client_pin(body),
                 0x07 => Some(Request::Reset),
                 0x0B => Some(Request::Select),
                 _ => Some(Request::Other),
@@ -257,6 +258,38 @@ fn get_assertion(body: &[u8]) -> Option<Request> {
     let mut map = cbor_map(body)?;
     let rp = take_int(&mut map, 0x01)?.extract_text_string()?;
     Some(Request::SignIn { rp })
+}
+
+// authenticatorClientPin: 0x02 = subCommand, 0x09 = permissions, 0x0A = rpId.
+// Only getPinUvAuthTokenUsingUvWithPermissions (0x06) asks for a gesture: the
+// browser verifies the user there, before the makeCredential/getAssertion
+// that the token is for, so the dialog needs the site from this request. The
+// other subcommands (getKeyAgreement, getRetries, ...) keep the context.
+fn client_pin(body: &[u8]) -> Option<Request> {
+    const GET_UV_TOKEN: i64 = 0x06;
+    const MC: i64 = 0x01;
+    const GA: i64 = 0x02;
+    let Some(mut map) = cbor_map(body) else {
+        return Some(Request::Other);
+    };
+    if take_int(&mut map, 0x02)?.extract_integer()? != GET_UV_TOKEN {
+        return None;
+    }
+    let permissions = take_int(&mut map, 0x09)
+        .and_then(|p| p.extract_integer())
+        .unwrap_or(0);
+    let rp = take_int(&mut map, 0x0A).and_then(|r| r.extract_text_string());
+    Some(match rp {
+        Some(rp) if permissions & MC != 0 => Request::Register {
+            rp,
+            user: None,
+            exclude: vec![],
+            has_uv: true,
+            existing: false,
+        },
+        Some(rp) if permissions & GA != 0 => Request::SignIn { rp },
+        _ => Request::Other,
+    })
 }
 
 /// Make site-supplied text safe and short for a dialog.
@@ -438,6 +471,42 @@ mod tests {
                 existing: false,
             })
         );
+    }
+
+    #[test]
+    fn uv_token_request_names_the_site() {
+        let _g = SERIAL.lock().unwrap();
+        let mut r = Reassembler::default();
+        let mut feed = |req: &[u8]| {
+            for p in packets(CTAPHID_CBOR, req) {
+                r.feed(&p);
+            }
+        };
+        // getPinUvAuthTokenUsingUvWithPermissions, mc permission.
+        feed(&cbor_req(
+            0x06,
+            cbor_map! { 0x01 => 2, 0x02 => 0x06, 0x09 => 0x01, 0x0A => "webauthn.io" },
+        ));
+        let register = Request::Register {
+            rp: "webauthn.io".into(),
+            user: None,
+            exclude: vec![],
+            has_uv: true,
+            existing: false,
+        };
+        assert_eq!(current(), Some(register.clone()));
+        // getKeyAgreement doesn't need a gesture and keeps the context.
+        feed(&cbor_req(0x06, cbor_map! { 0x01 => 2, 0x02 => 0x02 }));
+        assert_eq!(current(), Some(register));
+        // ga permission.
+        feed(&cbor_req(
+            0x06,
+            cbor_map! { 0x01 => 2, 0x02 => 0x06, 0x09 => 0x02, 0x0A => "google.com" },
+        ));
+        assert_eq!(current(), Some(Request::SignIn { rp: "google.com".into() }));
+        // No rpId (e.g. credential management): generic prompt.
+        feed(&cbor_req(0x06, cbor_map! { 0x01 => 2, 0x02 => 0x06, 0x09 => 0x04 }));
+        assert_eq!(current(), Some(Request::Other));
     }
 
     #[test]

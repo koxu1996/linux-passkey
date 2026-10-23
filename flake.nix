@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # OpenSK CTAP2 core, pinned; patched via Nix (no manual clone/patch needed).
     opensk = {
-      url = "github:google/OpenSK/a93efdb2a94a01607a8df2813fe06c3f6fb58292";
+      url = "github:google/OpenSK/af63209d857b93f342a297e7560e78c2b6915497";
       flake = false;
     };
   };
@@ -20,12 +20,13 @@
     let
       pkgs = nixpkgs.legacyPackages.${system};
 
-      # Apply our one-line getInfo patch (pinUvAuthToken only when a PIN is set)
-      # to the fetched OpenSK source.
+      # Apply our patches to the fetched OpenSK source.
       patchedOpenSK = pkgs.applyPatches {
         name = "opensk-patched";
         src = opensk;
         patches = [
+          # Hide pinUvAuthToken without a clientPIN, so browsers use built-in
+          # UV and our dialog sees the whole request (account, duplicates).
           ./patches/opensk-pinuvauthtoken.patch
           # Expose ctap::storage so we can spot already-registered sites.
           ./patches/opensk-pub-storage.patch

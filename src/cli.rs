@@ -1,10 +1,11 @@
 //! Local credential management: `linux-passkey list` / `linux-passkey delete`.
 //!
-//! CTAP's own credential management (browser settings, `fido2-token -L`) needs
-//! a pinUvAuthToken, i.e. a clientPIN, which this authenticator deliberately
-//! does not have. These commands read the hardware-sealed store directly instead.
-//! Only discoverable credentials (passkeys) are stored; non-discoverable ones
-//! live wrapped inside the site's credential id and cannot be listed.
+//! These read the hardware-sealed store directly: no dialog, and `list` works
+//! while the daemon runs (CTAP's own credential management needs a
+//! pinUvAuthToken, which opensk-pinuvauthtoken.patch hides from browsers). Every credential is stored
+//! there: non-discoverable requests are kept as discoverable too
+//! (opensk-resident-fallback.patch), so nothing lives only in a site's
+//! credential id.
 
 use crate::env::AppEnv;
 use crate::uhid::UhidConnection;

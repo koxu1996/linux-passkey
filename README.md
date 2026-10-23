@@ -81,7 +81,7 @@ nix build            # → ./result/bin/linux-passkey
 ```
 
 Cargo, for development: needs `../OpenSK` next to this repo (Google's OpenSK at
-`a93efdb2a94a01607a8df2813fe06c3f6fb58292`, with `patches/*.patch` applied).
+`af63209`, with `patches/*.patch` applied).
 Then:
 
 ```sh
@@ -257,14 +257,21 @@ registered".
 
 ## OpenSK patches
 
-Applied by the flake (`patches/`) on top of OpenSK `a93efdb`:
+Applied by the flake (`patches/`) on top of OpenSK `af63209`:
 
 | Patch | Why |
 |---|---|
-| `opensk-pinuvauthtoken.patch` | Advertise `pinUvAuthToken` only when a clientPIN is set. Otherwise browsers take the token path, which OpenSK only allows with a PIN (`PIN_NOT_SET`, "operation timed out"). |
+| `opensk-pinuvauthtoken.patch` | Advertise `pinUvAuthToken` only when a clientPIN is set. Browsers then send `uv` inside makeCredential/getAssertion instead of fetching a token first, so the dialog sees the whole request: it names the account and catches an already-registered one before asking (like Windows Hello / Touch ID). |
 | `opensk-pub-storage.patch` | `mod storage` → `pub mod storage`, for duplicate detection and `list`/`delete`. |
 | `opensk-resident-fallback.patch` | Store a non-discoverable credential as discoverable when the wrapped key doesn't fit in the fixed-size credential ID (instead of `VENDOR_INTERNAL_ERROR`). |
 | `opensk-uv-on-register.patch` | `makeCredUvNotRqd: false` when built-in UV is enrolled, so registrations carry the UV flag (Google: real passkey, not 2SV). |
+
+The token path itself works without a PIN since
+[google/OpenSK#822](https://github.com/google/OpenSK/pull/822) (before that,
+hiding `pinUvAuthToken` was the only way to register at all), but there the
+dialog runs before the browser sends the account and exclude list, so it can
+only say "Create a passkey for example.com". The patch is now a UX choice; if a
+platform still asks for a token, the dialog names the site from its rpId.
 
 ## Code map
 

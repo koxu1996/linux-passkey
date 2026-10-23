@@ -19,17 +19,17 @@
     "opensk": {
       "flake": false,
       "locked": {
-        "lastModified": 1791299046,
-        "narHash": "sha256-Na/4k0krWKrHURuvpF3mVYUeHW0iT8sQM1bDn6byWio=",
+        "lastModified": 1792676926,
+        "narHash": "sha256-YFA/8GWQ6pxU1B/zqM3OKgaKqbr71wp+9SxVDNyB9AY=",
         "owner": "google",
         "repo": "OpenSK",
-        "rev": "a93efdb2a94a01607a8df2813fe06c3f6fb58292",
+        "rev": "af63209d857b93f342a297e7560e78c2b6915497",
         "type": "github"
       },
       "original": {
         "owner": "google",
         "repo": "OpenSK",
-        "rev": "a93efdb2a94a01607a8df2813fe06c3f6fb58292",
+        "rev": "af63209d857b93f342a297e7560e78c2b6915497",
         "type": "github"
       }
     },
