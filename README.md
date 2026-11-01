@@ -177,6 +177,11 @@ c99c38e89f37a57b  #4    webauthn.io                  test22oct2026
 memory and would overwrite the change. Deleting here doesn't tell the site;
 remove the key in the site's settings too.
 
+`unblock` (daemon stopped too) clears the failed-approval counter. After 8
+failed built-in UV attempts in a row, OpenSK refuses UV and sites see
+`CTAP2_ERR_PIN_BLOCKED` (0x32). With no clientPIN there is no CTAP way to unblock
+it, short of a reset that deletes every passkey.
+
 Every credential is listed. Sites that ask for a non-discoverable credential
 (e.g. 2-Step Verification keys, `pamu2fcfg` without `-r`) get a discoverable
 one: OpenSK would wrap the key into the credential ID, but a TPM-wrapped key
@@ -289,7 +294,7 @@ platform still asks for a token, the dialog names the site from its rpId.
 | `src/fingerprint.rs` | built-in UV = the approval (one enrolled "template") |
 | `src/fprintd.rs` | fingerprint check via `fprintd-verify` (`LINUX_PASSKEY_UV=fprintd`) |
 | `src/request.rs` | CTAPHID reassembly + CBOR peek: dialog wording, duplicate detection |
-| `src/cli.rs` | `list` / `delete` |
+| `src/cli.rs` | `list` / `delete` / `unblock` |
 | `nix/module.nix` | `services.linux-passkey` |
 | `browser/passkey-platform-shim/` | Google passkey-creation shim (extension) |
 

@@ -1,4 +1,4 @@
-//! Local credential management: `linux-passkey list` / `linux-passkey delete`.
+//! Local credential management: `linux-passkey list` / `delete` / `unblock`.
 //!
 //! These read the hardware-sealed store directly: no dialog, and `list` works
 //! while the daemon runs (CTAP's own credential management needs a
@@ -140,5 +140,17 @@ pub fn delete(data_dir: PathBuf, args: &[String]) -> Result<()> {
             .map_err(|e| anyhow!("deleting {}: {e:?}", hex(&id)))?;
     }
     println!("done. (The site may still list this key; remove it there too.)");
+    Ok(())
+}
+
+/// `unblock`: forget failed built-in UV attempts. After `max_uv_retries` of
+/// them OpenSK refuses UV (`PIN_BLOCKED`), and with no clientPIN there is no
+/// CTAP way to unblock short of authenticatorReset.
+pub fn unblock(data_dir: PathBuf) -> Result<()> {
+    let mut env = open(data_dir, true)?;
+    let left = storage::uv_retries(&mut env).map_err(|e| anyhow!("reading UV retries: {e:?}"))?;
+    storage::reset_uv_retries(&mut env).map_err(|e| anyhow!("resetting UV retries: {e:?}"))?;
+    let max = storage::uv_retries(&mut env).map_err(|e| anyhow!("reading UV retries: {e:?}"))?;
+    println!("UV retries: {left} -> {max}");
     Ok(())
 }

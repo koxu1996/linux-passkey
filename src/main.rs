@@ -42,6 +42,8 @@ USAGE:
   linux-passkey delete [--yes] ID-PREFIX...
   linux-passkey delete [--yes] --rp SITE [--keep-newest]
                                        delete passkeys (daemon must be stopped)
+  linux-passkey unblock                 clear failed-approval lockout (PIN_BLOCKED;
+                                       daemon must be stopped)
 
 ENVIRONMENT:
   LINUX_PASSKEY_DATA_DIR   store dir (default ~/.local/share/linux-passkey)
@@ -117,7 +119,7 @@ fn main() -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
-    if !matches!(command, "serve" | "list" | "delete") {
+    if !matches!(command, "serve" | "list" | "delete" | "unblock") {
         anyhow::bail!("unknown command '{command}'\n\n{USAGE}");
     }
 
@@ -145,6 +147,7 @@ fn main() -> Result<()> {
             return cli::list(data_dir, rp);
         }
         "delete" => return cli::delete(data_dir, &args[1..]),
+        "unblock" => return cli::unblock(data_dir),
         _ => {}
     }
 
