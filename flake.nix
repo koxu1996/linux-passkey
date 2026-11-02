@@ -35,6 +35,9 @@
           # Store non-discoverable credentials as discoverable when the
           # TPM-wrapped key does not fit in the fixed-size credential ID.
           ./patches/opensk-resident-fallback.patch
+          # Fingerprint outcomes that are not a failed match (Deny, cancel,
+          # broken sensor): no UV retry used, and their own status codes.
+          ./patches/opensk-uv-outcomes.patch
         ];
       };
 

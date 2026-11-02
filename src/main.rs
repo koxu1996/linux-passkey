@@ -11,6 +11,7 @@ mod crypto;
 mod env;
 mod fingerprint;
 mod fprintd;
+mod pinentry;
 mod presence;
 mod request;
 mod rng;

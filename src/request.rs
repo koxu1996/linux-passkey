@@ -54,12 +54,19 @@ pub enum Request {
 }
 
 static CURRENT: Mutex<Option<Request>> = Mutex::new(None);
+/// CTAPHID channel the current request came in on.
+static CURRENT_CID: Mutex<[u8; 4]> = Mutex::new([0; 4]);
 /// The user already confirmed a dialog for the current request.
 static CONFIRMED: AtomicBool = AtomicBool::new(false);
 
 /// The request the authenticator is currently working on, if known.
 pub fn current() -> Option<Request> {
     CURRENT.lock().ok().and_then(|g| g.clone())
+}
+
+/// The CTAPHID channel of the current request (where a CANCEL for it arrives).
+pub fn current_cid() -> [u8; 4] {
+    CURRENT_CID.lock().map(|g| *g).unwrap_or_default()
 }
 
 /// Record that the user confirmed a dialog for the current request.
@@ -163,6 +170,9 @@ impl Reassembler {
                 CONFIRMED.store(false, Ordering::SeqCst);
                 if let Ok(mut g) = CURRENT.lock() {
                     *g = Some(req);
+                }
+                if let Ok(mut g) = CURRENT_CID.lock() {
+                    *g = self.cid;
                 }
                 return true;
             }

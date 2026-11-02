@@ -1,0 +1,33 @@
+--- a/libraries/opensk/src/api/fingerprint.rs
++++ b/libraries/opensk/src/api/fingerprint.rs
+@@ -13,6 +13,12 @@
+     NoMatch,
+     Timeout,
+     Other,
++    /// The user refused the check (not a failed match: no UV retry is used).
++    Declined,
++    /// The check was abandoned, e.g. the platform went away (no UV retry is used).
++    Canceled,
++    /// The sensor could not take a sample (not a failed match: no UV retry is used).
++    Unavailable,
+ }
+ 
+ /// Status code for enrolling fingerprints
+--- a/libraries/opensk/src/ctap/fingerprint.rs
++++ b/libraries/opensk/src/ctap/fingerprint.rs
+@@ -192,6 +192,15 @@
+                             return Err(Ctap2StatusCode::CTAP2_ERR_UV_INVALID);
+                         }
+                     }
++                    FingerprintCheckError::Declined => {
++                        return Err(Ctap2StatusCode::CTAP2_ERR_OPERATION_DENIED);
++                    }
++                    FingerprintCheckError::Canceled => {
++                        return Err(Ctap2StatusCode::CTAP2_ERR_KEEPALIVE_CANCEL);
++                    }
++                    FingerprintCheckError::Unavailable => {
++                        return Err(Ctap2StatusCode::CTAP1_ERR_OTHER);
++                    }
+                     FingerprintCheckError::Timeout => {
+                         // Send a KEEPALIVE to avoid timeouts on Windows.
+                         let keepalive_msg = CtapHid::<E>::keepalive(cid, KeepaliveStatus::UpNeeded);

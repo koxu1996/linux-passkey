@@ -26,7 +26,7 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
               ┌───────────────┼─────────────────────────┐
               ▼               ▼                         ▼
        OpenSK CTAP2 core   TPM (tss-esapi)          pinentry-qt
-       (patched, 3 tiny    P-256 keys created +     one Confirm dialog =
+       (patched, 5 small   P-256 keys created +     one Confirm dialog =
         patches)           signed in the TPM;       user presence + user
               │            store key TPM-sealed     verification
               ▼
@@ -67,6 +67,12 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
 - **Duplicate detection.** When a site already has this authenticator (its
   `excludeList` contains one of our credentials), you get one honest
   "already registered" dialog instead of one or two "Create a passkey" ones.
+- **Deny means no.** *Deny* (or closing the dialog) answers
+  `CTAP2_ERR_OPERATION_DENIED`, which clients don't retry. Only a finger that
+  doesn't match (`UV_INVALID`) uses up one of the 8 UV attempts; a sensor or
+  dialog error answers `CTAP1_ERR_OTHER` and doesn't use one.
+- **No stale dialogs.** When a request ends (timeout, CTAPHID_CANCEL, or the
+  client closing the device) its dialog and `fprintd-verify` are killed.
 - **Local management** with `list` / `delete` (CTAP credential management
   needs a PIN, which we don't have).
 - **Encrypted, TPM-sealed store.** The credential database is AES-256-GCM
@@ -270,6 +276,7 @@ Applied by the flake (`patches/`) on top of OpenSK `af63209`:
 | `opensk-pub-storage.patch` | `mod storage` → `pub mod storage`, for duplicate detection and `list`/`delete`. |
 | `opensk-resident-fallback.patch` | Store a non-discoverable credential as discoverable when the wrapped key doesn't fit in the fixed-size credential ID (instead of `VENDOR_INTERNAL_ERROR`). |
 | `opensk-uv-on-register.patch` | `makeCredUvNotRqd: false` when built-in UV is enrolled, so registrations carry the UV flag (Google: real passkey, not 2SV). |
+| `opensk-uv-outcomes.patch` | Fingerprint outcomes besides match / no match / timeout: `Declined` (`OPERATION_DENIED`), `Canceled` (`KEEPALIVE_CANCEL`) and `Unavailable` (`CTAP1_ERR_OTHER`). None of them uses a UV retry. Upstream, Deny could only be reported as a failed match. |
 
 The token path itself works without a PIN since
 [google/OpenSK#822](https://github.com/google/OpenSK/pull/822) (before that,
@@ -283,14 +290,15 @@ platform still asks for a token, the dialog names the site from its rpId.
 | File | |
 |---|---|
 | `src/main.rs` | CLI dispatch; daemon loop: HID report → request peek → `Ctap::process_hid_packet` → send |
-| `src/uhid.rs` | virtual FIDO HID device (usage page `0xF1D0`) over `/dev/uhid` |
+| `src/uhid.rs` | virtual FIDO HID device (usage page `0xF1D0`) over `/dev/uhid`; a reader thread fills an inbox that a pending approval checks for CANCEL / host close |
 | `src/env.rs` | OpenSK `Env`: wires TPM crypto, store, prompts, clock, RNG |
 | `src/backend.rs` | `Backend` trait (credential keys + store cipher), process-global; shared conformance test |
 | `src/crypto.rs` | OpenSK `Ecdsa` over the backend's wrapped key material |
 | `src/tpm.rs` | TPM backend: TPM2 Create/Load/Sign; store key sealed to the TPM |
 | `src/sep.rs` | Secure Enclave backend: enclave key create/sign ioctls; store key is an enclave-sealed kernel trusted key, AES-GCM in the kernel (AF_ALG) |
 | `src/store.rs` | AES-256-GCM file store, TPM-sealed key, writer lock |
-| `src/presence.rs` | user presence = pinentry Confirm |
+| `src/presence.rs` | user presence = pinentry Confirm; the approval thread and killing it (`Pending`, `Abort`) |
+| `src/pinentry.rs` | pinentry (Assuan) client: the Confirm/Deny dialog, always reaped |
 | `src/fingerprint.rs` | built-in UV = the approval (one enrolled "template") |
 | `src/fprintd.rs` | fingerprint check via `fprintd-verify` (`LINUX_PASSKEY_UV=fprintd`) |
 | `src/request.rs` | CTAPHID reassembly + CBOR peek: dialog wording, duplicate detection |

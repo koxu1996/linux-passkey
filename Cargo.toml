@@ -14,8 +14,6 @@ opensk = { path = "../OpenSK/libraries/opensk", features = ["std", "fingerprint"
 sk-cbor = { path = "../OpenSK/libraries/cbor" }
 # Virtual USB-HID device via /dev/uhid.
 uhid-virt = "0.0.8"
-# pinentry popup for user presence/verification (same flavor gpg-agent uses).
-pinentry = "0.5"
 # TPM 2.0 for credential key generation + signing (same versions as fidorium;
 # the -sys alpha is required — stable 0.6.0's bindings mismatch the 8.0 alpha).
 tss-esapi = "=8.0.0-alpha.1"
