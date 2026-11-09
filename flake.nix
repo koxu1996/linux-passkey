@@ -38,6 +38,10 @@
           # Fingerprint outcomes that are not a failed match (Deny, cancel,
           # broken sensor): no UV retry used, and their own status codes.
           ./patches/opensk-uv-outcomes.patch
+          # Accept CBOR map keys in any order (sorted on read, duplicates still
+          # rejected): Firefox sends getAssertion options as {"uv", "up"}
+          # (https://bugzilla.mozilla.org/show_bug.cgi?id=2090860).
+          ./patches/opensk-cbor-unordered-keys.patch
         ];
       };
 

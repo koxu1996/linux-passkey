@@ -272,6 +272,7 @@ Applied by the flake (`patches/`) on top of OpenSK `af63209`:
 
 | Patch | Why |
 |---|---|
+| `opensk-cbor-unordered-keys.patch` | Accept CBOR map keys in any order: sort them on read (OpenSK's request parsing expects sorted maps), still reject duplicates. Firefox (authenticator-rs) sends getAssertion options as `{"uv", "up"}` when a site asks for user verification, which upstream answers with `CTAP2_ERR_INVALID_CBOR`, so the prompt closes at once ([bug 2090860](https://bugzilla.mozilla.org/show_bug.cgi?id=2090860)). Hardware keys accept it. Drop once Firefox encodes canonically. |
 | `opensk-pinuvauthtoken.patch` | Advertise `pinUvAuthToken` only when a clientPIN is set. Browsers then send `uv` inside makeCredential/getAssertion instead of fetching a token first, so the dialog sees the whole request: it names the account and catches an already-registered one before asking (like Windows Hello / Touch ID). |
 | `opensk-pub-storage.patch` | `mod storage` → `pub mod storage`, for duplicate detection and `list`/`delete`. |
 | `opensk-resident-fallback.patch` | Store a non-discoverable credential as discoverable when the wrapped key doesn't fit in the fixed-size credential ID (instead of `VENDOR_INTERNAL_ERROR`). |
@@ -312,6 +313,7 @@ platform still asks for a token, the dialog names the site from its rpId.
 |---|---|
 | Two dialogs, one says "FIDO Confirm Register" | `tpm-fido` is running too: `systemctl --user stop tpm-fido`, remove it from your config |
 | "Your device can't be used with this site" | a U2F-only key answered (tpm-fido), or the site needs something not advertised; check `brave://device-log` |
+| Firefox/LibreWolf: the prompt flashes and closes, no dialog | a build without `opensk-cbor-unordered-keys.patch` rejected Firefox's out-of-order getAssertion options ([bug 2090860](https://bugzilla.mozilla.org/show_bug.cgi?id=2090860)) |
 | Google: "A passkey can't be created on this device" | expected on Linux; use the [shim](#google) |
 | Google: "Your key requires a password … 2-Step Verification only" | enrolled via "another device", or before the UV patch; delete it in 2SV settings and re-create via the shim |
 | "store … is in use" | daemon running; stop it for `delete`, or don't start a second daemon |

@@ -1,0 +1,76 @@
+--- a/libraries/cbor/src/reader.rs
++++ b/libraries/cbor/src/reader.rs
+@@ -192,15 +192,16 @@
+         let mut value_map = Vec::<(Value, Value)>::new();
+         for _ in 0..size_value {
+             let key = self.decode_complete_data_item(remaining_depth.map(|d| d - 1))?;
+-            if let Some(last_item) = value_map.last()
+-                && last_item.0 >= key
+-            {
+-                return Err(DecoderError::OutOfOrderKey);
+-            }
+-            value_map.push((
+-                key,
+-                self.decode_complete_data_item(remaining_depth.map(|d| d - 1))?,
+-            ));
++            let value = self.decode_complete_data_item(remaining_depth.map(|d| d - 1))?;
++            value_map.push((key, value));
++        }
++        // CTAP2 requires canonical (sorted) map keys, but Firefox sends getAssertion
++        // options as {"uv", "up"} (https://bugzilla.mozilla.org/show_bug.cgi?id=2090860),
++        // which hardware authenticators accept. Take keys in any order and sort them, as
++        // destructure_cbor_map! expects; duplicate keys are still an error.
++        value_map.sort_by(|a, b| a.0.cmp(&b.0));
++        if value_map.windows(2).any(|pair| pair[0].0 == pair[1].0) {
++            return Err(DecoderError::OutOfOrderKey);
+         }
+         Ok(cbor_map_collection!(value_map))
+     }
+@@ -769,9 +770,16 @@
+     }
+ 
+     #[test]
+-    fn test_read_out_of_order_key_error() {
++    fn test_read_out_of_order_keys_sorted() {
+         let cases = vec![
+             vec![
++                0xa2, // Firefox's getAssertion options (bug 2090860)
++                0x62, b'u', b'v', // key "uv"
++                0xf5, // true
++                0x62, b'u', b'p', // key "up" (out of order byte-wise lexically)
++                0xf5, // true
++            ],
++            vec![
+                 0xa2, // map with 2 keys with same major type and length
+                 0x61, 0x62, // key "b"
+                 0x61, 0x42, // value "B"
+@@ -808,7 +816,8 @@
+             ],
+         ];
+         for cbor in cases {
+-            assert_eq!(read(&cbor), Err(DecoderError::OutOfOrderKey));
++            let map = read(&cbor).unwrap().extract_map().unwrap();
++            assert!(map.windows(2).all(|pair| pair[0].0 < pair[1].0));
+         }
+     }
+ 
+@@ -833,6 +842,19 @@
+             read(&map_with_duplicate_key),
+             Err(DecoderError::OutOfOrderKey)
+         );
++        let map_with_unordered_duplicate_key = vec![
++            0xa3, // map of 3 pairs:
++            0x61, 0x62, // "b"
++            0x01, // 1
++            0x61, 0x61, // "a"
++            0x02, // 2
++            0x61, 0x62, // "b" (Duplicate key, not next to the first)
++            0x03, // 3
++        ];
++        assert_eq!(
++            read(&map_with_unordered_duplicate_key),
++            Err(DecoderError::OutOfOrderKey)
++        );
+     }
+ 
+     #[test]
