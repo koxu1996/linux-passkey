@@ -1,0 +1,15 @@
+--- a/libraries/opensk/src/lib.rs
++++ b/libraries/opensk/src/lib.rs
+@@ -85,6 +85,12 @@
+         &mut self.env
+     }
+ 
++    /// Processes one CTAP2 command (command byte, then CBOR) outside CTAPHID,
++    /// for embedders with their own transport. Returns status byte + CBOR.
++    pub fn process_command(&mut self, command_cbor: &[u8], channel: crate::ctap::Channel) -> Vec<u8> {
++        self.state.process_command(&mut self.env, command_cbor, channel)
++    }
++
+     pub fn process_hid_packet(
+         &mut self,
+         packet: &HidPacket,

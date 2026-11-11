@@ -52,6 +52,10 @@ impl UserCheck {
     /// act on a credential (see [`request::wants_fingerprint`]).
     pub fn confirm(&self, req: Option<&request::Request>, abort: &Abort) -> Outcome {
         let mut prompt = Prompt::for_request(req);
+        // Over D-Bus the browser can still try its own authenticators.
+        if request::is_internal() && !matches!(req, Some(request::Request::Register { existing: true, .. })) {
+            prompt.elsewhere = Some("Use another device".into());
+        }
         let finger = self.fprintd_verify.as_deref().filter(|_| request::wants_fingerprint(req));
         if finger.is_some() {
             prompt.description.push_str("\n\nAfter confirming, touch the fingerprint sensor.");
@@ -60,6 +64,11 @@ impl UserCheck {
             Ok(crate::pinentry::Answer::Confirmed) => {}
             Ok(crate::pinentry::Answer::Denied) => {
                 tracing::info!("request denied");
+                return Outcome::Denied;
+            }
+            Ok(crate::pinentry::Answer::Elsewhere) => {
+                tracing::info!("request sent to another device");
+                request::note_elsewhere();
                 return Outcome::Denied;
             }
             Err(e) => {
@@ -140,7 +149,8 @@ pub struct Pending {
     rx: Receiver<Outcome>,
     abort: Abort,
     /// [`crate::uhid::closes`] when it started: a change means the host is gone.
-    closes: u64,
+    /// None for D-Bus requests, which no USB host waits for.
+    closes: Option<u64>,
 }
 
 pub enum Poll {
@@ -160,14 +170,14 @@ impl Pending {
         std::thread::spawn(move || {
             let _ = tx.send(check.confirm(req.as_ref(), &job));
         });
-        Pending { rx, abort, closes: crate::uhid::closes() }
+        Pending { rx, abort, closes: host_closes() }
     }
 
     /// An approval that already has its answer.
     fn done(outcome: Outcome) -> Self {
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(outcome);
-        Pending { rx, abort: Abort::default(), closes: crate::uhid::closes() }
+        Pending { rx, abort: Abort::default(), closes: host_closes() }
     }
 
     /// Wait up to `timeout` for the user, checking the host (and `interrupted`)
@@ -176,7 +186,7 @@ impl Pending {
         const TICK: Duration = Duration::from_millis(20);
         let deadline = Instant::now() + timeout;
         loop {
-            if crate::uhid::closes() != self.closes {
+            if self.closes.is_some_and(|c| c != crate::uhid::closes()) {
                 return Poll::HostGone;
             }
             if interrupted() {
@@ -191,6 +201,10 @@ impl Pending {
             }
         }
     }
+}
+
+fn host_closes() -> Option<u64> {
+    (!request::is_internal()).then(crate::uhid::closes)
 }
 
 impl Drop for Pending {

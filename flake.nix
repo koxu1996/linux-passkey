@@ -42,6 +42,9 @@
           # rejected): Firefox sends getAssertion options as {"uv", "up"}
           # (https://bugzilla.mozilla.org/show_bug.cgi?id=2090860).
           ./patches/opensk-cbor-unordered-keys.patch
+          # Ctap::process_command: CTAP2 commands without CTAPHID, for the
+          # D-Bus front-end (browser extension).
+          ./patches/opensk-process-command.patch
         ];
       };
 

@@ -50,10 +50,12 @@ struct InboxState {
     closes: u64,
     /// The device is gone (read error or STOP): recv fails from now on.
     failed: bool,
+    /// [`wake`] was called: the next recv returns at once.
+    woken: bool,
 }
 
 static INBOX: Inbox = Inbox {
-    state: Mutex::new(InboxState { packets: VecDeque::new(), closes: 0, failed: false }),
+    state: Mutex::new(InboxState { packets: VecDeque::new(), closes: 0, failed: false, woken: false }),
     ready: Condvar::new(),
 };
 
@@ -77,6 +79,23 @@ pub fn take_cancel(cid: [u8; 4]) -> bool {
     let mut st = inbox();
     let found = st.packets.iter().position(|p| p[..4] == cid && p[4] == CTAPHID_CANCEL);
     found.is_some_and(|i| st.packets.remove(i).is_some())
+}
+
+/// Make a waiting (or the next) recv return early, for work that doesn't come
+/// from the host (D-Bus requests).
+pub fn wake() {
+    inbox().woken = true;
+    INBOX.ready.notify_all();
+}
+
+/// Queue a CTAPHID_CANCEL for channel `cid`, as if the host had sent it: how a
+/// D-Bus request is cancelled while it waits for the user.
+pub fn push_cancel(cid: [u8; 4]) {
+    let mut pkt = [0u8; 64];
+    pkt[..4].copy_from_slice(&cid);
+    pkt[4] = CTAPHID_CANCEL;
+    inbox().packets.push_back(pkt);
+    INBOX.ready.notify_all();
 }
 
 pub struct UhidConnection {
@@ -166,6 +185,10 @@ fn read_events(mut file: File) {
 
 impl HidConnection for UhidConnection {
     fn send(&mut self, buf: &[u8; 64], _endpoint: UsbEndpoint) -> CtapResult<()> {
+        // For a D-Bus request (keepalives): no host listens there.
+        if buf[..4] == crate::request::INTERNAL_CID {
+            return Ok(());
+        }
         let event: [u8; UHID_EVENT_SIZE] = InputEvent::Input { data: buf }.into();
         let file = self.file.as_mut().ok_or_else(hw_err)?;
         file.write_all(&event).map_err(|_| hw_err())
@@ -185,6 +208,10 @@ impl HidConnection for UhidConnection {
             }
             if st.failed {
                 return Err(hw_err());
+            }
+            if st.woken {
+                st.woken = false;
+                return Ok(RecvStatus::Timeout);
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {

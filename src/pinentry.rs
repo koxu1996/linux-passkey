@@ -16,6 +16,8 @@ pub enum Answer {
     Confirmed,
     /// Deny, or the dialog was closed.
     Denied,
+    /// The third button ([`Prompt::elsewhere`]): use another authenticator.
+    Elsewhere,
 }
 
 /// GPG error codes (low 16 bits of an Assuan `ERR`) that mean "the user said no".
@@ -40,8 +42,16 @@ pub fn confirm(bin: &str, prompt: &Prompt, abort: &Abort) -> io::Result<Answer> 
         ] {
             request(&mut input, &mut output, &format!("{command} {}", escape(value)))?;
         }
+        // pinentry's "not OK" button: CONFIRM then fails with NOT_CONFIRMED,
+        // while Deny (Cancel) and closing the window give CANCELED.
+        if let Some(label) = &prompt.elsewhere {
+            request(&mut input, &mut output, &format!("SETNOTOK {}", escape(label)))?;
+        }
         let answer = match request(&mut input, &mut output, "CONFIRM") {
             Ok(()) => Answer::Confirmed,
+            Err(Error::Assuan(code)) if code & 0xFFFF == GPG_ERR_NOT_CONFIRMED && prompt.elsewhere.is_some() => {
+                Answer::Elsewhere
+            }
             Err(Error::Assuan(code)) if matches!(code & 0xFFFF, GPG_ERR_CANCELED | GPG_ERR_NOT_CONFIRMED) => {
                 Answer::Denied
             }

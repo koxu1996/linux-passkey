@@ -58,6 +58,8 @@ static CURRENT: Mutex<Option<Request>> = Mutex::new(None);
 static CURRENT_CID: Mutex<[u8; 4]> = Mutex::new([0; 4]);
 /// The user already confirmed a dialog for the current request.
 static CONFIRMED: AtomicBool = AtomicBool::new(false);
+/// The user sent the current request to another authenticator.
+static ELSEWHERE: AtomicBool = AtomicBool::new(false);
 
 /// The request the authenticator is currently working on, if known.
 pub fn current() -> Option<Request> {
@@ -165,20 +167,72 @@ impl Reassembler {
         }
         if self.active && self.data.len() == self.len {
             self.active = false;
-            if let Some(req) = classify(self.cmd, &self.data) {
-                tracing::debug!(?req, "incoming request");
-                CONFIRMED.store(false, Ordering::SeqCst);
-                if let Ok(mut g) = CURRENT.lock() {
-                    *g = Some(req);
-                }
-                if let Ok(mut g) = CURRENT_CID.lock() {
-                    *g = self.cid;
-                }
-                return true;
-            }
+            return record(self.cid, self.cmd, &self.data);
         }
         false
     }
+}
+
+/// Note a complete message as the current request; false for messages that
+/// never need a gesture.
+fn record(cid: [u8; 4], cmd: u8, data: &[u8]) -> bool {
+    let Some(req) = classify(cmd, data) else {
+        return false;
+    };
+    tracing::debug!(?req, "incoming request");
+    CONFIRMED.store(false, Ordering::SeqCst);
+    ELSEWHERE.store(false, Ordering::SeqCst);
+    if let Ok(mut g) = CURRENT.lock() {
+        *g = Some(req);
+    }
+    if let Ok(mut g) = CURRENT_CID.lock() {
+        *g = cid;
+    }
+    true
+}
+
+/// Channel id of requests from the D-Bus front-end (`gateway.rs`), which
+/// OpenSK processes without CTAPHID. 0 is reserved in CTAPHID, so no host has
+/// it; the uhid device drops what OpenSK sends there (keepalives).
+pub const INTERNAL_CID: [u8; 4] = [0; 4];
+
+/// A request from the D-Bus front-end (command byte, then CBOR) becomes the
+/// current one.
+pub fn begin_internal(command: &[u8]) {
+    const CTAPHID_CBOR: u8 = 0x90;
+    record(INTERNAL_CID, CTAPHID_CBOR, command);
+}
+
+/// The current request came over D-Bus, not from a USB host.
+pub fn is_internal() -> bool {
+    current_cid() == INTERNAL_CID
+}
+
+/// Record that the user picked "Use another device" for the current request.
+pub fn note_elsewhere() {
+    ELSEWHERE.store(true, Ordering::SeqCst);
+}
+
+/// The user picked "Use another device" for the current request.
+pub fn chose_elsewhere() -> bool {
+    ELSEWHERE.load(Ordering::SeqCst)
+}
+
+/// Is one of `ids` ours for `rp` (or, with no ids, do we have any passkey for
+/// `rp`)? Answered from the store, without asking the user, so a sign-in we
+/// can't serve goes straight to the browser's own authenticators.
+pub fn has_credential<E: Env>(env: &mut E, rp: &str, ids: &[Vec<u8>]) -> bool {
+    if ids.is_empty() {
+        let mut result = Ok(());
+        return opensk::ctap::storage::iter_credentials(env, &mut result)
+            .map(|mut creds| creds.any(|(_, c)| c.rp_id == rp))
+            .unwrap_or(false);
+    }
+    let rp_hash = Sha256::digest(rp.as_bytes());
+    ids.iter().any(|id| {
+        opensk::ctap::storage::find_credential(env, rp, id).ok().flatten().is_some()
+            || env.key_store().unwrap_credential(id, &rp_hash).ok().flatten().is_some()
+    })
 }
 
 /// Map a complete CTAPHID message to a Request. Returns None for messages
@@ -330,6 +384,8 @@ pub struct Prompt {
     pub title: String,
     pub description: String,
     pub ok: String,
+    /// A third button that hands the request to another authenticator.
+    pub elsewhere: Option<String>,
 }
 
 impl Prompt {
@@ -338,6 +394,7 @@ impl Prompt {
             title: title.to_string(),
             description,
             ok: ok.to_string(),
+            elsewhere: None,
         };
         match req {
             Some(Request::Register { rp, user, existing: true, .. }) => p(

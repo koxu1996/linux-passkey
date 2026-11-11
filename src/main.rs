@@ -11,6 +11,8 @@ mod crypto;
 mod env;
 mod fingerprint;
 mod fprintd;
+mod gateway;
+mod native_host;
 mod pinentry;
 mod presence;
 mod request;
@@ -19,11 +21,13 @@ mod sep;
 mod store;
 mod tpm;
 mod uhid;
+mod webauthn;
 
 use anyhow::Result;
 use opensk::Ctap;
 use opensk::Transport;
 use opensk::api::connection::{HidConnection, RecvStatus, UsbEndpoint};
+use opensk::ctap::Channel;
 use opensk::env::Env;
 
 use env::AppEnv;
@@ -38,7 +42,9 @@ const USAGE: &str = "\
 linux-passkey — TPM 2.0-backed FIDO2/CTAP2 authenticator
 
 USAGE:
-  linux-passkey [serve]                 run the authenticator (virtual USB key)
+  linux-passkey [serve]                 run the authenticator (virtual USB key + D-Bus)
+  linux-passkey native-host             browser native messaging host (started by the
+                                       browser extension; also as linux-passkey-native-host)
   linux-passkey list [--rp SITE]        list stored passkeys
   linux-passkey delete [--yes] ID-PREFIX...
   linux-passkey delete [--yes] --rp SITE [--keep-newest]
@@ -87,6 +93,15 @@ fn migrate_store(old: &std::path::Path, new: &std::path::Path) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // Browsers start the native host with their own arguments (the manifest
+    // path, or the extension's origin), so it is picked by program name too.
+    let program = std::env::args().next().unwrap_or_default();
+    if program.ends_with("linux-passkey-native-host")
+        || std::env::args().nth(1).as_deref() == Some("native-host")
+    {
+        return native_host::run();
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -165,6 +180,20 @@ fn main() -> Result<()> {
 
     let mut ctap = Ctap::new(env);
 
+    // The browser extension's front-end (gateway.rs). Without a session bus
+    // the USB key still works.
+    let (jobs_tx, jobs) = std::sync::mpsc::channel();
+    let _bus = match gateway::serve(jobs_tx) {
+        Ok(bus) => {
+            tracing::info!("D-Bus gateway ready ({})", gateway::BUS_NAME);
+            Some(bus)
+        }
+        Err(e) => {
+            tracing::warn!("no D-Bus gateway ({e}); browsers can use the USB key only");
+            None
+        }
+    };
+
     // Enroll one built-in-UV "template" so the authenticator advertises uv:true
     // and the browser performs built-in UV (our pinentry) instead of a clientPIN.
     {
@@ -224,6 +253,37 @@ fn main() -> Result<()> {
                 break;
             }
         }
+        while let Ok(job) = jobs.try_recv() {
+            run_job(&mut ctap, job);
+        }
     }
     Ok(())
+}
+
+/// One WebAuthn ceremony from D-Bus, on the same OpenSK state as the USB key.
+fn run_job(ctap: &mut Ctap<AppEnv>, job: gateway::Job) {
+    let c = &job.ceremony;
+    if !gateway::start(&job.call) {
+        let _ = job.reply.send(Err(webauthn::Error::Abort));
+        return;
+    }
+    let result = if c.kind == webauthn::Kind::Get && !request::has_credential(ctap.env(), &c.rp_id, &c.allow) {
+        // Nothing to sign with: the browser asks its own authenticators.
+        Err(webauthn::Error::NoCredential)
+    } else {
+        request::begin_internal(&c.command);
+        request::check_already_registered(ctap.env());
+        let reply = ctap.process_command(&c.command, Channel::MainHid(request::INTERNAL_CID));
+        match c.response(&reply) {
+            Err(webauthn::Error::NotAllowed(_)) if request::chose_elsewhere() => {
+                Err(webauthn::Error::NoCredential)
+            }
+            r => r,
+        }
+    };
+    gateway::finish();
+    if let Err(e) = &result {
+        tracing::info!(rp = %c.rp_id, "D-Bus request ended: {}", e.name());
+    }
+    let _ = job.reply.send(result);
 }
