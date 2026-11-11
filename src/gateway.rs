@@ -37,6 +37,8 @@ pub type CallId = (String, u32);
 pub struct Job {
     pub ceremony: Ceremony,
     pub call: CallId,
+    /// The app asking, for the dialog ("Brave").
+    pub app: Option<String>,
     pub reply: oneshot::Sender<Result<String, Error>>,
 }
 
@@ -123,6 +125,7 @@ fn reply(kind: &str, key: &str, json: String) -> Result<HashMap<String, OwnedVal
 impl Gateway {
     async fn run(
         &self,
+        conn: &zbus::Connection,
         header: &Header<'_>,
         origin: String,
         options: &HashMap<String, OwnedValue>,
@@ -135,8 +138,9 @@ impl Gateway {
         let sender = header.sender().map(|s| s.to_string()).unwrap_or_default();
         let request_id = options.get("request_id").and_then(|v| u32::try_from(v.clone()).ok()).unwrap_or(0);
         tracing::info!(origin = %caller.origin, rp = %ceremony.rp_id, kind = ?ceremony.kind, "D-Bus request");
+        let app = caller_app(conn, &sender).await;
         let (tx, rx) = oneshot::channel();
-        let job = Job { ceremony, call: (sender, request_id), reply: tx };
+        let job = Job { ceremony, call: (sender, request_id), app, reply: tx };
         self.jobs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -152,6 +156,7 @@ impl Gateway {
 impl Gateway {
     async fn create_credential(
         &self,
+        #[zbus(connection)] conn: &zbus::Connection,
         #[zbus(header)] header: Header<'_>,
         _parent_window: String,
         origin: String,
@@ -161,18 +166,19 @@ impl Gateway {
         if r#type != "publicKey" {
             return Err(GatewayError::NotSupported(format!("credential type {type:?}")));
         }
-        let json = self.run(&header, origin, &options, Ceremony::create).await?;
+        let json = self.run(conn, &header, origin, &options, Ceremony::create).await?;
         reply("publicKey", "registration_response_json", json)
     }
 
     async fn get_credential(
         &self,
+        #[zbus(connection)] conn: &zbus::Connection,
         #[zbus(header)] header: Header<'_>,
         _parent_window: String,
         origin: String,
         options: HashMap<String, OwnedValue>,
     ) -> Result<HashMap<String, OwnedValue>, GatewayError> {
-        let json = self.run(&header, origin, &options, Ceremony::get).await?;
+        let json = self.run(conn, &header, origin, &options, Ceremony::get).await?;
         reply("publicKey", "authentication_response_json", json)
     }
 
@@ -200,6 +206,45 @@ impl Gateway {
             }
             c.cancelled.push(call);
         }
+    }
+}
+
+/// The app behind a caller, for the dialog: the browser that started the
+/// native host (its parent process), named by its executable. Looked up by
+/// us from the bus, not taken from the caller. Display only.
+async fn caller_app(conn: &zbus::Connection, sender: &str) -> Option<String> {
+    let dbus = zbus::fdo::DBusProxy::new(conn).await.ok()?;
+    let name = zbus::names::BusName::try_from(sender).ok()?;
+    let pid = dbus.get_connection_unix_process_id(name).await.ok()?;
+    let mut pid = parent(pid)?;
+    // Skip a shell or wrapper between the browser and the host.
+    for _ in 0..3 {
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        let base = exe.file_name()?.to_string_lossy().trim_start_matches('.').trim_end_matches("-wrapped").to_string();
+        if !matches!(base.as_str(), "sh" | "bash" | "dash" | "zsh" | "env") {
+            return Some(app_name(&base));
+        }
+        pid = parent(pid)?;
+    }
+    None
+}
+
+fn parent(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // pid (comm) state ppid ...; comm may contain spaces and parentheses.
+    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
+}
+
+fn app_name(exe: &str) -> String {
+    match exe {
+        "brave" => "Brave".into(),
+        "chrome" | "google-chrome" => "Chrome".into(),
+        "chromium" => "Chromium".into(),
+        "librewolf" => "LibreWolf".into(),
+        "firefox" => "Firefox".into(),
+        "msedge" => "Edge".into(),
+        "vivaldi-bin" => "Vivaldi".into(),
+        other => other.to_string(),
     }
 }
 

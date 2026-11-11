@@ -1,6 +1,6 @@
 # Design: linux-passkey as a platform authenticator in the browser
 
-Status: Phase 1 implemented 2026-11-11 (D-Bus gateway, native host, extension; tested on webauthn.io and Google in Brave 155 and LibreWolf 158).
+Status: Phase 1 implemented 2026-11-11 (D-Bus gateway, native host, extension; tested on webauthn.io and Google in Brave 155 and LibreWolf 158). Phase 2 implemented 2026-11-11 (approval agent, GTK4 dialog).
 
 ## Problem
 
@@ -299,11 +299,33 @@ takes requests from a queue (HID messages and D-Bus calls). The HID side keeps
 its keepalive and cancel semantics. A D-Bus `Cancel` maps to the same `Abort`
 that `presence.rs` already uses.
 
-Several credentials for one rpId (discoverable get): OpenSK returns
-`numberOfCredentials` and expects `getNextAssertion`. On this path the dialog
-should be an account picker. pinentry can't show lists, so Phase 2 needs a
-real dialog (GTK4/libadwaita, or the Quickshell shell over D-Bus). Phase 1
-shows the most recent credential and names the account.
+Several credentials for one rpId (discoverable get): the dialog is an account
+picker (Phase 2). It runs before OpenSK, on the store's list of our passkeys
+for the rp id; the chosen one becomes the only allowList entry. OpenSK still
+returns the user handle for it, so usernameless sign-in keeps working.
+
+### Approval agent (Phase 2)
+
+The dialog is an *agent*, in the polkit sense: a separate program that only
+draws and reports the answer, so desktops (or a shell like Quickshell) can
+bring their own. The daemon starts one per request (`LINUX_PASSKEY_DIALOG`)
+and speaks JSON lines over its stdin/stdout (`src/agent.rs`): an `ask` with
+the operation, rp id, origin, requesting app, accounts and whether the finger
+follows; the answer `approve` (with the chosen account), `deny` or
+`elsewhere`; then `fingerprint` states and `done`. During the finger, a
+`deny` from the agent stops fprintd.
+
+For extension requests the agent runs before OpenSK (`preapprove`, 60 s,
+cancellable over D-Bus) and the session stays open; OpenSK's UV hook then
+only runs the finger in it. A finger that doesn't match is retried in the same
+dialog (3 attempts, each one an OpenSK UV failure). USB requests run the agent
+from the hook as before. pinentry stays as the fallback.
+
+The requesting app is looked up by the daemon: the D-Bus caller's pid is the
+native host, its parent the browser, named by its executable. Display only.
+
+A desktop-provided agent registering itself over D-Bus (polkit's
+`RegisterAuthenticationAgent`) would carry the same messages; not built.
 
 Once this path is the browser default, `opensk-pinuvauthtoken.patch` stops
 mattering to browsers. Keep it for CTAP clients that still want the full
@@ -369,8 +391,10 @@ What we can push on, with a working implementation as evidence:
    availability checks, LibreWolf and Brave packaging, NixOS option. Done
    when: webauthn.io, Google (without the shim) and GitHub register and sign
    in on both browsers, and USB-created passkeys still sign in.
-2. **Real dialog**: account picker, "Use another device", requesting browser
-   shown. Fingerprint prompt inside the dialog instead of after it.
+2. **Real dialog** (done): account picker, "Use another device", requesting
+   browser shown, fingerprint step inside the dialog, 60 s to answer.
+   Not yet: Wayland parenting / activation token (the native host has no
+   window handle to pass).
 3. **Passkey autofill**: `mediation: "conditional"`. The extension shows its
    own suggestion popup on `input[autocomplete~="webauthn"]`, fed by a
    gesture-free `ListCredentials(rp_id)` that returns user names only. The
@@ -390,4 +414,4 @@ What we can push on, with a working implementation as evidence:
 - Should `NoCredential` fallback use the browser's sheet directly, or first
   say "no passkey on this device" in our dialog?
 - Does credentialsd plan to handle the dialog itself, with providers being
-  headless? That would decide whether our Phase 2 dialog is throwaway.
+  headless? The agent split keeps our dialog replaceable either way.

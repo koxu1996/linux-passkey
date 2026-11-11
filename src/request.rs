@@ -218,6 +218,29 @@ pub fn chose_elsewhere() -> bool {
     ELSEWHERE.load(Ordering::SeqCst)
 }
 
+/// Our passkeys for `rp` (limited to `ids` when given), newest first, for the
+/// dialog's account choice. Credentials that live only in their id (not in
+/// the store) can't be listed.
+pub fn accounts<E: Env>(env: &mut E, rp: &str, ids: &[Vec<u8>]) -> Vec<crate::agent::Account> {
+    let mut result = Ok(());
+    let Ok(creds) = opensk::ctap::storage::iter_credentials(env, &mut result) else {
+        return vec![];
+    };
+    let mut found: Vec<_> = creds
+        .map(|(_, c)| c)
+        .filter(|c| c.rp_id == rp && (ids.is_empty() || ids.contains(&c.credential_id)))
+        .collect();
+    found.sort_by_key(|c| std::cmp::Reverse(c.creation_order));
+    found
+        .into_iter()
+        .map(|c| crate::agent::Account {
+            id: crate::agent::account_id(&c.credential_id),
+            name: c.user_name,
+            display_name: c.user_display_name,
+        })
+        .collect()
+}
+
 /// Is one of `ids` ours for `rp` (or, with no ids, do we have any passkey for
 /// `rp`)? Answered from the store, without asking the user, so a sign-in we
 /// can't serve goes straight to the browser's own authenticators.

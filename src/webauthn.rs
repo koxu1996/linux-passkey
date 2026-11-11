@@ -162,6 +162,11 @@ pub struct Caller {
 pub struct Ceremony {
     pub kind: Kind,
     pub rp_id: String,
+    /// The caller's origin, serialized (for the dialog).
+    pub origin: String,
+    /// The account a registration is for: (name, display name).
+    pub user: Option<(String, String)>,
+    client_data_hash: Vec<u8>,
     /// The CTAP2 command: command byte, then CBOR.
     pub command: Vec<u8>,
     client_data_json: String,
@@ -244,6 +249,22 @@ fn descriptors(list: &[Descriptor]) -> Vec<Cbor> {
         .collect()
 }
 
+fn get_assertion(rp_id: &str, client_data_hash: &[u8], allow: &[Vec<u8>]) -> Vec<u8> {
+    let allow_list: Vec<Cbor> = allow
+        .iter()
+        .map(|id| cbor_map! { "id" => cbor_bytes!(id.clone()), "type" => "public-key" })
+        .collect();
+    encode(
+        GET_ASSERTION,
+        cbor_map_options! {
+            0x01 => rp_id.to_string(),
+            0x02 => cbor_bytes!(client_data_hash.to_vec()),
+            0x03 => (!allow_list.is_empty()).then(|| cbor_array_vec!(allow_list)),
+            0x05 => cbor_map! { "up" => true, "uv" => true },
+        },
+    )
+}
+
 fn checked_top_origin(caller: &Caller) -> Result<Option<String>, Error> {
     caller.top_origin.as_deref().map(|t| parse_origin(t).map(|(o, _)| o)).transpose()
 }
@@ -274,6 +295,7 @@ impl Ceremony {
         let client_data_json =
             client_data_json(Kind::Create, &opts.challenge.0, &origin, top_origin.as_deref());
         let exclude = descriptors(&opts.exclude_credentials);
+        let (user_name, user_display_name) = (opts.user.name, opts.user.display_name);
         // Always discoverable and always user-verified, like the built-in
         // authenticators of Windows and macOS.
         let command = encode(
@@ -283,8 +305,8 @@ impl Ceremony {
                 0x02 => cbor_map! { "id" => rp_id.clone(), "name" => opts.rp.name },
                 0x03 => cbor_map! {
                     "id" => cbor_bytes!(opts.user.id.0),
-                    "name" => opts.user.name,
-                    "displayName" => opts.user.display_name,
+                    "name" => user_name.clone(),
+                    "displayName" => user_display_name.clone(),
                 },
                 0x04 => cbor_array_vec!(params),
                 0x05 => (!exclude.is_empty()).then(|| cbor_array_vec!(exclude)),
@@ -294,6 +316,9 @@ impl Ceremony {
         Ok(Ceremony {
             kind: Kind::Create,
             rp_id,
+            origin,
+            user: Some((user_name, user_display_name)),
+            client_data_hash: Sha256::digest(client_data_json.as_bytes()).to_vec(),
             command,
             client_data_json,
             allow: vec![],
@@ -311,30 +336,31 @@ impl Ceremony {
         check_rp_id(&host, &rp_id)?;
         let client_data_json =
             client_data_json(Kind::Get, &opts.challenge.0, &origin, top_origin.as_deref());
-        let allow_list = descriptors(&opts.allow_credentials);
-        let command = encode(
-            GET_ASSERTION,
-            cbor_map_options! {
-                0x01 => rp_id.clone(),
-                0x02 => cbor_bytes!(Sha256::digest(client_data_json.as_bytes()).to_vec()),
-                0x03 => (!allow_list.is_empty()).then(|| cbor_array_vec!(allow_list)),
-                0x05 => cbor_map! { "up" => true, "uv" => true },
-            },
-        );
         let _ = &opts.extensions; // none supported yet (prf, largeBlob: later)
+        let allow: Vec<Vec<u8>> = opts
+            .allow_credentials
+            .into_iter()
+            .filter(|d| d.kind == "public-key")
+            .map(|d| d.id.0)
+            .collect();
+        let client_data_hash = Sha256::digest(client_data_json.as_bytes()).to_vec();
         Ok(Ceremony {
             kind: Kind::Get,
+            command: get_assertion(&rp_id, &client_data_hash, &allow),
             rp_id,
-            command,
+            origin,
+            user: None,
+            client_data_hash,
             client_data_json,
-            allow: opts
-                .allow_credentials
-                .into_iter()
-                .filter(|d| d.kind == "public-key")
-                .map(|d| d.id.0)
-                .collect(),
+            allow,
             cred_props: false,
         })
+    }
+
+    /// Sign in with this credential only: the account the user picked.
+    pub fn restrict_to(&mut self, credential_id: Vec<u8>) {
+        self.allow = vec![credential_id];
+        self.command = get_assertion(&self.rp_id, &self.client_data_hash, &self.allow);
     }
 
     /// Turn OpenSK's reply (status byte, then CBOR) into the response JSON.
@@ -563,6 +589,20 @@ mod tests {
         let mut opts = Vec::new();
         sk_cbor::write(take(&mut map, 5).unwrap(), &mut opts).unwrap();
         assert_eq!(opts, [0xA2, 0x62, b'u', b'p', 0xF5, 0x62, b'u', b'v', 0xF5]);
+    }
+
+    #[test]
+    fn restrict_to_one_account() {
+        let mut c = Ceremony::get(&caller("https://webauthn.io"), r#"{"challenge":"AAAA"}"#).unwrap();
+        let before = c.command.clone();
+        c.restrict_to(vec![1, 2, 3]);
+        assert_eq!(c.allow, vec![vec![1, 2, 3]]);
+        let mut map = sk_cbor::read(&c.command[1..]).unwrap().extract_map().unwrap();
+        let list = take(&mut map, 3).unwrap().extract_array().unwrap();
+        assert_eq!(list.len(), 1);
+        // Same client data: the signature still covers what the site sent.
+        let mut old = sk_cbor::read(&before[1..]).unwrap().extract_map().unwrap();
+        assert_eq!(take(&mut map, 2), take(&mut old, 2));
     }
 
     fn auth_data_with_key(id: &[u8]) -> Vec<u8> {

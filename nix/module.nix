@@ -47,6 +47,17 @@ in
       '';
     };
 
+    dialog = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.dialog;
+      defaultText = lib.literalExpression "linux-passkey's GTK4 dialog";
+      description = ''
+        Approval dialog (agent) that names the site, the browser and the account,
+        offers a choice of account, and shows the fingerprint step. `null` uses
+        the pinentry dialog instead (also the fallback when this one can't start).
+      '';
+    };
+
     pinentry = lib.mkOption {
       type = lib.types.package;
       default = pkgs.pinentry-qt;
@@ -99,7 +110,8 @@ in
             "LINUX_PASSKEY_UV=${cfg.uv}"
             "LINUX_PASSKEY_PINENTRY=${cfg.pinentry}/bin/${cfg.pinentryProgram}"
             "RUST_LOG=info"
-          ] ++ lib.optional sep "LINUX_PASSKEY_SEP_DEVICE=${cfg.sepDevice}"
+          ] ++ lib.optional (cfg.dialog != null) "LINUX_PASSKEY_DIALOG=${lib.getExe cfg.dialog}"
+            ++ lib.optional sep "LINUX_PASSKEY_SEP_DEVICE=${cfg.sepDevice}"
             ++ lib.optional (cfg.uv == "fprintd")
             "LINUX_PASSKEY_FPRINTD_VERIFY=${config.services.fprintd.package}/bin/fprintd-verify";
           Restart = "on-failure";

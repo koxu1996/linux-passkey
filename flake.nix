@@ -124,6 +124,32 @@
         (cd firefox && zip -qX -r $out/linux-passkey.xpi .)
       '';
 
+      # The approval dialog (agent, GTK4 + libadwaita): its own crate, so the
+      # daemon builds without GTK.
+      dialog = pkgs.rustPlatform.buildRustPackage {
+        pname = "linux-passkey-dialog";
+        version = "0.1.0";
+        src = ./dialog;
+        cargoLock.lockFile = ./dialog/Cargo.lock;
+        nativeBuildInputs = [ pkgs.pkg-config pkgs.wrapGAppsHook4 ];
+        buildInputs = [ pkgs.gtk4 pkgs.libadwaita ];
+        # Adwaita's fingerprint and account icons under hicolor, the fallback
+        # every icon theme has, so they show whatever theme the desktop uses.
+        postInstall = ''
+          icons=$out/share/icons/hicolor/scalable/status
+          mkdir -p $icons
+          for i in devices/auth-fingerprint-symbolic status/avatar-default-symbolic status/dialog-password-symbolic; do
+            cp ${pkgs.adwaita-icon-theme}/share/icons/Adwaita/symbolic/$i.svg $icons/
+          done
+        '';
+        meta = {
+          description = "GTK4 approval dialog for linux-passkey";
+          license = pkgs.lib.licenses.asl20;
+          mainProgram = "linux-passkey-dialog";
+          platforms = pkgs.lib.platforms.linux;
+        };
+      };
+
       linux-passkey = mkLinuxPasskey { };
       linuxPasskeyTests = (mkLinuxPasskey { pname = "linux-passkey-tests"; }).overrideAttrs { doCheck = true; };
     in
@@ -132,6 +158,7 @@
         default = linux-passkey;
         linux-passkey = linux-passkey;
         browser-extension = browserExtension;
+        dialog = dialog;
         # With OpenSK's internal debug output (run with RUST_LOG=debug).
         debug = mkLinuxPasskey {
           pname = "linux-passkey-debug";

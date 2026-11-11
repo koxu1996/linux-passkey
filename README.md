@@ -54,16 +54,26 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
   happens inside the TPM. Copying the files to another machine gets you
   nothing.
 - **No PIN, one dialog.** User verification is OpenSK's built-in-UV
-  ("fingerprint") path, backed by a pinentry Confirm. A performed UV also
-  counts as user presence, so every operation is exactly **one** click.
+  ("fingerprint") path, backed by the approval dialog. A performed UV also
+  counts as user presence, so every operation is exactly **one** dialog.
 - **The dialog says what is happening and for whom:**
-  - *Register*: "Create a passkey for google.com as "you@gmail.com"?" `[Register]`
-  - *Sign in*: "Sign in to webauthn.io with your passkey?" `[Sign in]`
-  - *Already registered*: "webauthn.io already has a passkey from this device …"
+  - *Register*: "Create a passkey for google.com", with the account `[Create]`
+  - *Sign in*: "Sign in to google.com", from "Brave · accounts.google.com",
+    with a **choice of account** when the site has several of your passkeys
+  - *Already registered*: "google.com already has a passkey …"
+  - *Key selection* (the browser's make.me.blink / .dummy probe): "Use this
+    security key? … Nothing is created."
   - *Reset*: an explicit "deletes ALL passkeys" warning.
 
-  Site-supplied text is stripped of control characters and `<>&` and capped at
-  64 characters.
+  With fingerprints on, the same window then says "Touch the fingerprint
+  sensor" (and "Not recognized. Try again." up to 3 times); Cancel works at
+  every step. Site-supplied text is stripped of control characters and capped
+  at 64 characters.
+- **Approval agent.** The dialog is a separate program, like a polkit agent:
+  the daemon starts it per request and talks JSON lines to it
+  (`src/agent.rs` has the protocol); it only draws. The default is
+  `linux-passkey-dialog` (GTK4 + libadwaita, `dialog/`, `.#dialog`); without
+  one (`services.linux-passkey.dialog = null`) pinentry asks instead.
 - **UV on registration**, so the UV flag is set and sites treat it as a real
   passkey, not a second factor (see [Google](#google)).
 - **Duplicate detection.** When a site already has this authenticator (its
@@ -370,6 +380,8 @@ platform still asks for a token, the dialog names the site from its rpId.
 | `src/webauthn.rs` | WebAuthn JSON ↔ CTAP2: origin and rp id checks, clientDataJSON, response JSON (attestation `none`) |
 | `src/gateway.rs` | D-Bus gateway (`Gateway1`): requests queued for the main loop, cancel |
 | `src/native_host.rs` | browser native messaging host ↔ D-Bus |
+| `src/agent.rs` | approval agent protocol: the dialog session, account choice before OpenSK runs, fingerprint step |
+| `dialog/` | `linux-passkey-dialog`, the GTK4 agent (own crate and lock file) |
 | `nix/module.nix` | `services.linux-passkey` |
 | `browser/linux-passkey-extension/` | the platform-authenticator extension (MV3, Chromium + Firefox) |
 | `browser/passkey-platform-shim/` | Google passkey-creation shim for the USB path (not needed with the extension) |

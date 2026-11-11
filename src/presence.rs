@@ -24,11 +24,13 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-/// How the user approves a request: a pinentry dialog naming the site (and
-/// account), then optionally a fingerprint check. Shared by user presence and
-/// the fingerprint-backed user verification, so every path asks the same way.
+/// How the user approves a request: a dialog naming the site (and account),
+/// then optionally a fingerprint check. Shared by user presence and the
+/// fingerprint-backed user verification, so every path asks the same way.
 #[derive(Clone)]
 pub struct UserCheck {
+    /// The approval agent (linux-passkey-dialog, `LINUX_PASSKEY_DIALOG`); pinentry without one.
+    pub dialog_bin: Option<String>,
     pub pinentry_bin: String,
     /// `fprintd-verify` binary when fingerprints are on (`LINUX_PASSKEY_UV=fprintd`).
     pub fprintd_verify: Option<String>,
@@ -51,12 +53,29 @@ impl UserCheck {
     /// Dialog first; the finger only after a confirm, and only for requests that
     /// act on a credential (see [`request::wants_fingerprint`]).
     pub fn confirm(&self, req: Option<&request::Request>, abort: &Abort) -> Outcome {
+        let finger = self.fprintd_verify.as_deref().filter(|_| request::wants_fingerprint(req));
+        // An extension request the user approved in the dialog already.
+        if crate::agent::is_preapproved() {
+            return crate::agent::preapproved_fingerprint(finger, abort);
+        }
+        if let Some(bin) = &self.dialog_bin {
+            match crate::agent::Session::start(bin) {
+                Ok(session) => {
+                    let ask = crate::agent::Ask::for_request(req, finger.is_some());
+                    return crate::agent::approve(session, &ask, finger, abort);
+                }
+                Err(e) => tracing::warn!("approval dialog '{bin}' failed to start ({e}); using pinentry"),
+            }
+        }
+        self.confirm_pinentry(req, finger, abort)
+    }
+
+    fn confirm_pinentry(&self, req: Option<&request::Request>, finger: Option<&str>, abort: &Abort) -> Outcome {
         let mut prompt = Prompt::for_request(req);
         // Over D-Bus the browser can still try its own authenticators.
         if request::is_internal() && !matches!(req, Some(request::Request::Register { existing: true, .. })) {
             prompt.elsewhere = Some("Use another device".into());
         }
-        let finger = self.fprintd_verify.as_deref().filter(|_| request::wants_fingerprint(req));
         if finger.is_some() {
             prompt.description.push_str("\n\nAfter confirming, touch the fingerprint sensor.");
         }
@@ -94,6 +113,8 @@ pub struct Abort(Arc<Mutex<AbortState>>);
 struct AbortState {
     aborted: bool,
     child: Option<Child>,
+    /// Processes owned elsewhere (the approval dialog), killed on abort too.
+    adopted: Vec<Arc<Mutex<Child>>>,
 }
 
 /// The pipes of a process started with [`Abort::spawn`].
@@ -115,6 +136,18 @@ impl Abort {
         if let Some(child) = st.child.as_mut() {
             let _ = child.kill();
         }
+        for child in &st.adopted {
+            let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        }
+    }
+
+    /// Kill `child` too when the request ends.
+    pub fn adopt(&self, child: Arc<Mutex<Child>>) {
+        let mut st = self.state();
+        if st.aborted {
+            let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        }
+        st.adopted.push(child);
     }
 
     pub fn is_aborted(&self) -> bool {
