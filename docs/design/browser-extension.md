@@ -1,6 +1,6 @@
 # Design: linux-passkey as a platform authenticator in the browser
 
-Status: Phase 1 implemented 2026-11-11 (D-Bus gateway, native host, extension; tested on webauthn.io and Google in Brave 155 and LibreWolf 158). Phase 2 implemented 2026-11-11 (approval agent, GTK4 dialog).
+Status: Phase 1 implemented 2026-11-11 (D-Bus gateway, native host, extension; tested on webauthn.io and Google in Brave 155 and LibreWolf 158). Phase 2 implemented 2026-11-11 (approval agent, GTK4 dialog). Phase 3 implemented 2026-11-11 (passkey autofill).
 
 ## Problem
 
@@ -112,7 +112,7 @@ because browsers can only start a native messaging process, not call D-Bus.
 |---|---|---|
 | `inject.js` | `browser/platform-extension/`, MAIN world, `document_start`, `all_frames` | Wrap `navigator.credentials.create/get` and the `PublicKeyCredential` statics; serialize options with `toJSON` semantics; rebuild results; fall back to the originals |
 | `relay.js` | ISOLATED world | Accept messages only from `event.source === window`, forward to background, return the reply. Holds no logic, so the page can't reach extension APIs through it |
-| `background.js` | service worker / event page | Take `origin`, `frameId` and top-level origin from `runtime.MessageSender`; keep one native port; map aborts to `Cancel` |
+| `service-worker.js` | background: service worker / event page | Take `origin`, `frameId` and top-level origin from `runtime.MessageSender`; keep one native port; map aborts to `Cancel` |
 | `native-host` | `src/native_host.rs` | Native messaging framing ↔ D-Bus calls |
 | D-Bus service | `src/dbus.rs` in the daemon | Validate, build `clientDataJSON`, run the ceremony on the shared `Ctap`, return JSON |
 
@@ -395,12 +395,15 @@ What we can push on, with a working implementation as evidence:
    browser shown, fingerprint step inside the dialog, 60 s to answer.
    Not yet: Wayland parenting / activation token (the native host has no
    window handle to pass).
-3. **Passkey autofill**: `mediation: "conditional"`. The extension shows its
-   own suggestion popup on `input[autocomplete~="webauthn"]`, fed by a
-   gesture-free `ListCredentials(rp_id)` that returns user names only. The
-   popup must be extension UI (a top-layer element in a closed shadow root
-   outside the page's reach, or `browser.action` popup), so the page can't
-   read the account list.
+3. **Passkey autofill** (done): `mediation: "conditional"`. The daemon's
+   `ListCredentials(origin, options)` returns the account names for the rp id
+   (no dialog, no signature). The background keeps them under a random token;
+   relay.js shows `suggest.html#token` (a web-accessible extension page, in an
+   iframe the site can't read) under a focused `input[autocomplete~="webauthn"]`.
+   A pick goes from that page to the background, which runs GetCredential
+   with only that credential in allowCredentials. A denied dialog re-arms the
+   list; a modal request from the page replaces the autofill one; no passkey
+   here hands the request to the browser's own conditional UI.
 4. **Upstream**: propose the provider interface to credentialsd, and prototype
    the Firefox backend against it.
 

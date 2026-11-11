@@ -141,9 +141,21 @@ programs.librewolf = {
 };
 ```
 
-(`lp = linux-passkey.packages.${system}`.) Not yet: passkey autofill
-(`mediation: "conditional"`), cross-origin iframes (left to the browser),
-`prf`/`largeBlob` extensions on this path.
+(`lp = linux-passkey.packages.${system}`.) The flake sets the extension's
+version from the commit time (`0.3.<day>.<minute>`): browsers keep loading
+their stored copy of an extension while its version stays the same, even from
+a new path.
+
+**Passkey autofill.** On sites that ask for it (`mediation: "conditional"`,
+a field with `autocomplete="username webauthn"`), focusing the field opens
+"Passkeys on this computer" under it; picking one opens the dialog for that
+account. The list is our own extension page in an iframe, so the site can't
+read the account names; the daemon serves them with `ListCredentials` (names
+only, no dialog). With no passkey here for the site, the browser's own
+autofill answers.
+
+Not yet: cross-origin iframes (left to the browser), `prf`/`largeBlob`
+extensions on this path.
 
 ## Build and run
 

@@ -11,6 +11,7 @@
 //! io.github.koxu1996.LinuxPasskey.Gateway1
 //!   CreateCredential(s parent_window, s origin, s type, a{sv} options) -> a{sv}
 //!   GetCredential(s parent_window, s origin, a{sv} options) -> a{sv}
+//!   ListCredentials(s origin, a{sv} options) -> a{sv}   (passkey autofill)
 //!   GetClientCapabilities() -> a{sb}
 //!   Cancel(u request_id)
 //! ```
@@ -39,6 +40,8 @@ pub struct Job {
     pub call: CallId,
     /// The app asking, for the dialog ("Brave").
     pub app: Option<String>,
+    /// Only list the accounts this sign-in could use (passkey autofill).
+    pub list: bool,
     pub reply: oneshot::Sender<Result<String, Error>>,
 }
 
@@ -130,6 +133,7 @@ impl Gateway {
         origin: String,
         options: &HashMap<String, OwnedValue>,
         prepare: fn(&Caller, &str) -> Result<Ceremony, Error>,
+        list: bool,
     ) -> Result<String, GatewayError> {
         let caller = Caller { origin, top_origin: option_str(options, "top_origin") };
         let public_key = option_str(options, "public_key")
@@ -140,7 +144,7 @@ impl Gateway {
         tracing::info!(origin = %caller.origin, rp = %ceremony.rp_id, kind = ?ceremony.kind, "D-Bus request");
         let app = caller_app(conn, &sender).await;
         let (tx, rx) = oneshot::channel();
-        let job = Job { ceremony, call: (sender, request_id), app, reply: tx };
+        let job = Job { ceremony, call: (sender, request_id), app, list, reply: tx };
         self.jobs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -166,7 +170,7 @@ impl Gateway {
         if r#type != "publicKey" {
             return Err(GatewayError::NotSupported(format!("credential type {type:?}")));
         }
-        let json = self.run(conn, &header, origin, &options, Ceremony::create).await?;
+        let json = self.run(conn, &header, origin, &options, Ceremony::create, false).await?;
         reply("publicKey", "registration_response_json", json)
     }
 
@@ -178,8 +182,22 @@ impl Gateway {
         origin: String,
         options: HashMap<String, OwnedValue>,
     ) -> Result<HashMap<String, OwnedValue>, GatewayError> {
-        let json = self.run(conn, &header, origin, &options, Ceremony::get).await?;
+        let json = self.run(conn, &header, origin, &options, Ceremony::get, false).await?;
         reply("publicKey", "authentication_response_json", json)
+    }
+
+    /// The accounts a sign-in (`public_key`: request options JSON) could use,
+    /// for passkey autofill: `accounts_json` = [{id, name, displayName}],
+    /// newest first. No dialog: names only, no signature.
+    async fn list_credentials(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        #[zbus(header)] header: Header<'_>,
+        origin: String,
+        options: HashMap<String, OwnedValue>,
+    ) -> Result<HashMap<String, OwnedValue>, GatewayError> {
+        let json = self.run(conn, &header, origin, &options, Ceremony::get, true).await?;
+        reply("publicKey", "accounts_json", json)
     }
 
     /// WebAuthn L3 client capabilities this authenticator adds.
@@ -188,7 +206,7 @@ impl Gateway {
             ("userVerifyingPlatformAuthenticator".to_string(), true),
             ("passkeyPlatformAuthenticator".to_string(), true),
             ("conditionalCreate".to_string(), false),
-            ("conditionalGet".to_string(), false),
+            ("conditionalGet".to_string(), true),
         ])
     }
 

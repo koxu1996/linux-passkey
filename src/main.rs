@@ -289,6 +289,10 @@ const FINGER_ATTEMPTS: usize = 3;
 fn ceremony(ctap: &mut Ctap<AppEnv>, check: &presence::UserCheck, job: &mut gateway::Job) -> Result<String, webauthn::Error> {
     use webauthn::{Error, Kind};
     let c = &mut job.ceremony;
+    if job.list {
+        let accounts = request::accounts(ctap.env(), &c.rp_id, &c.allow);
+        return serde_json::to_string(&accounts).map_err(|e| Error::Unknown(e.to_string()));
+    }
     if c.kind == Kind::Get && !request::has_credential(ctap.env(), &c.rp_id, &c.allow) {
         // Nothing to sign with: the browser asks its own authenticators.
         return Err(Error::NoCredential);

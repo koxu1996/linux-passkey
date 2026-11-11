@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- Passkey autofill suggestions, shown by relay.js in an iframe under a
+     username field. An extension page, so the site can't read the accounts. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="suggest.css">
+</head>
+<body>
+  <div class="card" role="listbox" aria-label="Passkeys">
+    <div class="head">Passkeys on this computer</div>
+    <div id="list"></div>
+  </div>
+  <script src="suggest.js"></script>
+</body>
+</html>

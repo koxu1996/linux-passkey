@@ -1,7 +1,7 @@
 // Runs in the page's own JS world (MAIN), before the page's scripts: wraps
 // navigator.credentials so passkey requests go to linux-passkey as a
 // platform authenticator, and builds PublicKeyCredential-shaped results.
-// Untrusted by design: the origin comes from the browser (background.js),
+// Untrusted by design: the origin comes from the browser (service-worker.js),
 // not from here, so a page tampering with this only affects itself.
 (() => {
   const PKC = window.PublicKeyCredential;
@@ -12,6 +12,7 @@
     create: creds.create.bind(creds),
     get: creds.get.bind(creds),
     uvpaa: PKC.isUserVerifyingPlatformAuthenticatorAvailable?.bind(PKC),
+    conditional: PKC.isConditionalMediationAvailable?.bind(PKC),
     capabilities: PKC.getClientCapabilities?.bind(PKC),
   };
   // Captured before the page can replace them.
@@ -148,14 +149,22 @@
     return kind === "create" && pk.authenticatorSelection?.authenticatorAttachment === "cross-platform";
   }
 
+  // The pending passkey-autofill request, if any (one per page, like browsers).
+  let conditionalId = null;
+
   async function ceremony(kind, options) {
     const fallback = () => browserApi[kind](options);
     const pk = options?.publicKey;
-    if (!pk || options.mediation === "conditional" || wantsOtherAuthenticator(pk, kind)) return fallback();
+    const conditional = kind === "get" && options?.mediation === "conditional";
+    if (!pk || wantsOtherAuthenticator(pk, kind)) return fallback();
     const signal = options.signal;
     if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
 
-    const { id, reply } = ask({ op: kind, publicKey: toJSON(pk) });
+    // A new request replaces a pending autofill one (sites start a modal
+    // sign-in from a button while autofill waits in the field).
+    if (conditionalId !== null) cancel(conditionalId);
+    const { id, reply } = ask({ op: conditional ? "conditional" : kind, publicKey: toJSON(pk) });
+    if (conditional) conditionalId = id;
     let onAbort;
     const aborted = new Promise((_, reject) => {
       onAbort = () => {
@@ -169,6 +178,7 @@
       result = await Promise.race([reply, aborted]);
     } finally {
       signal?.removeEventListener("abort", onAbort);
+      if (conditionalId === id) conditionalId = null;
     }
     if (result.ok) return credential(result.response, kind);
     // Not ours to answer (no passkey here, "Use another device", daemon down).
@@ -186,6 +196,10 @@
   };
   creds.get = function get(options) {
     return ceremony("get", options);
+  };
+  PKC.isConditionalMediationAvailable = async function isConditionalMediationAvailable() {
+    if ((await ourCapabilities())?.conditionalGet) return true;
+    return browserApi.conditional ? browserApi.conditional() : false;
   };
   PKC.isUserVerifyingPlatformAuthenticatorAvailable = async function isUserVerifyingPlatformAuthenticatorAvailable() {
     if ((await ourCapabilities())?.userVerifyingPlatformAuthenticator) return true;

@@ -1,16 +1,16 @@
 {
   "manifest_version": 3,
   "name": "linux-passkey",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Use linux-passkey (TPM / Secure Enclave) as this computer's built-in passkey authenticator, instead of a virtual USB security key.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8aH+RTngUQiqDzfNsr8p2x07E1h6E538Tt+WfMxh9px4YaYZzJPwCBNEVehC9qHJTkwaKwD11zww2EU3oDhglgrYulpVYmaPrCb0HvxrEdJpYV9NeU0ahZ9Sw60MUkYS8tjN++wXztFBi9/iajALH6gM8bFX2JfgX7mQR7Teoy0iDwK/4T8s+cLLg+H8SmqNr1/TVy5Mb7aXrd0JiPAvkZ2ipKsFAFlvn4lKShwZm8smyc+E3VRwh3JVn7FCxKc0O788Nxrt0cBzy1w6ONQmG3j+Q6h9J6fealebpCQkAjzHEEVj0UpCXKJRwRTASxrj6ajb318M6Q5uyMHYwMXIwwIDAQAB",
   "permissions": [
     "nativeMessaging"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "service-worker.js",
     "scripts": [
-      "background.js"
+      "service-worker.js"
     ]
   },
   "content_scripts": [
@@ -48,5 +48,18 @@
         ]
       }
     }
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "suggest.html",
+        "suggest.js",
+        "suggest.css"
+      ],
+      "matches": [
+        "https://*/*",
+        "http://localhost/*"
+      ]
+    }
+  ]
 }

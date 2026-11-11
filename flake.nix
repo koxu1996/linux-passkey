@@ -110,16 +110,22 @@
       # The browser extension, one manifest per browser (each without the
       # other's keys): chromium/ (unpacked, for --load-extension) and
       # linux-passkey.xpi (unsigned, for a Firefox/LibreWolf policy install).
+      commitDay = toString (self.lastModified / 86400);
+      commitMinute = toString ((self.lastModified - self.lastModified / 86400 * 86400) / 60);
       browserExtension = pkgs.runCommand "linux-passkey-browser-extension" {
         nativeBuildInputs = [ pkgs.jq pkgs.zip ];
       } ''
         src=${./browser/linux-passkey-extension}
         mkdir -p $out/chromium firefox
-        cp $src/*.js $out/chromium/
-        cp $src/*.js firefox/
-        jq 'del(.browser_specific_settings) | .background |= del(.scripts)' \
+        cp $src/*.js $src/*.html $src/*.css $out/chromium/
+        cp $src/*.js $src/*.html $src/*.css firefox/
+        # A new version on every commit: browsers keep loading their stored
+        # copy of an extension (even from its old path) while the version stays
+        # the same. major.minor from manifest.json, then day.minute of the commit.
+        version=$(jq -r '.version | split(".")[0:2] | join(".")' $src/manifest.json).${commitDay}.${commitMinute}
+        jq --arg v "$version" '.version = $v | del(.browser_specific_settings) | .background |= del(.scripts)' \
           $src/manifest.json > $out/chromium/manifest.json
-        jq 'del(.key) | .background |= del(.service_worker)' \
+        jq --arg v "$version" '.version = $v | del(.key) | .background |= del(.service_worker)' \
           $src/manifest.json > firefox/manifest.json
         (cd firefox && zip -qX -r $out/linux-passkey.xpi .)
       '';

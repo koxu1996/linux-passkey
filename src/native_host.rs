@@ -8,9 +8,11 @@
 //!    "publicKey": {...WebAuthn options JSON...}}
 //!   {"id": 2, "op": "cancel", "target": 1}
 //!   {"id": 3, "op": "capabilities"}
+//!   {"id": 4, "op": "list", "origin": "...", "publicKey": {...}}   (autofill)
 //! To the extension:
 //!   {"id": 1, "ok": true, "response": {...credential JSON...}}
 //!   {"id": 3, "ok": true, "capabilities": {...}}
+//!   {"id": 4, "ok": true, "accounts": [{"id", "name", "displayName"}]}
 //!   {"id": 1, "ok": false, "error": "NotAllowedError", "message": "..."}
 //! `error` is a DOMException name, or `NoCredential` / `Unavailable`, which
 //! tell the extension to use the browser's own WebAuthn instead.
@@ -104,10 +106,10 @@ fn ceremony(conn: &Connection, id: u64, msg: &Json) -> Json {
     if let Some(top) = msg["topOrigin"].as_str() {
         options.insert("top_origin", Value::from(top.to_string()));
     }
-    let (result, key) = if op == "create" {
-        (call(conn, "CreateCredential", &("", origin, "publicKey", options)), "registration_response_json")
-    } else {
-        (call(conn, "GetCredential", &("", origin, options)), "authentication_response_json")
+    let (result, key, field) = match op {
+        "create" => (call(conn, "CreateCredential", &("", origin, "publicKey", options)), "registration_response_json", "response"),
+        "list" => (call(conn, "ListCredentials", &(origin, options)), "accounts_json", "accounts"),
+        _ => (call(conn, "GetCredential", &("", origin, options)), "authentication_response_json", "response"),
     };
     let reply = result.and_then(|m| m.body().deserialize::<HashMap<String, OwnedValue>>());
     match reply {
@@ -117,7 +119,7 @@ fn ceremony(conn: &Connection, id: u64, msg: &Json) -> Json {
                 .and_then(|v| String::try_from(v.clone()).ok())
                 .and_then(|s| serde_json::from_str::<Json>(&s).ok());
             match json {
-                Some(response) => json!({ "id": id, "ok": true, "response": response }),
+                Some(value) => json!({ "id": id, "ok": true, field: value }),
                 None => failure(id, "UnknownError", "malformed reply from linux-passkey"),
             }
         }
@@ -158,7 +160,7 @@ pub fn run() -> anyhow::Result<()> {
             continue;
         };
         match msg["op"].as_str() {
-            Some("create" | "get") => {
+            Some("create" | "get" | "list") => {
                 let (out, inflight) = (out.clone(), inflight.clone());
                 inflight.lock().unwrap_or_else(|e| e.into_inner()).insert(id);
                 std::thread::spawn(move || {
