@@ -8,7 +8,9 @@ can never leave it. One pinentry dialog per registration or sign-in replaces
 the touch and the PIN.
 
 Works today with **webauthn.io** and **Google** (passwordless sign-in), from
-Brave/Chromium.
+Brave/Chromium and LibreWolf/Firefox. With the [browser
+extension](#browser-extension) it is the browser's **built-in (platform)
+authenticator** instead of a USB key.
 
 > **Renamed from `tpm2-passkey`** (more backends are coming: Apple Secure
 > Enclave on Apple Silicon Linux is in progress). On first start the daemon
@@ -26,7 +28,7 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
               ┌───────────────┼─────────────────────────┐
               ▼               ▼                         ▼
        OpenSK CTAP2 core   TPM (tss-esapi)          pinentry-qt
-       (patched, 5 small   P-256 keys created +     one Confirm dialog =
+       (patched, 7 small   P-256 keys created +     one Confirm dialog =
         patches)           signed in the TPM;       user presence + user
               │            store key TPM-sealed     verification
               ▼
@@ -77,6 +79,61 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
   needs a PIN, which we don't have).
 - **Encrypted, TPM-sealed store.** The credential database is AES-256-GCM
   encrypted; the AES key is sealed to the TPM.
+
+## Browser extension
+
+[`browser/linux-passkey-extension`](browser/linux-passkey-extension) makes
+linux-passkey the browser's built-in passkey authenticator, the way Windows
+Hello and Touch ID are on their systems
+([design](docs/design/browser-extension.md)):
+
+```
+page ─▶ extension ─▶ linux-passkey-native-host ─D-Bus─▶ linux-passkey daemon
+        (navigator.credentials)  (native messaging)     (same store, dialog, TPM/SEP)
+```
+
+- Sites see a platform authenticator: Google offers "create a passkey on this
+  device" by itself, no shim. Passkeys are reported as `platform` /
+  `internal`.
+- The dialog gets the whole request from the start (site, account, already
+  registered), with a third button, **Use another device**, that hands the
+  request to the browser's own WebAuthn (USB keys, phones). A sign-in for a
+  site with no passkey here goes there silently.
+- The extension, not the browser, encodes CTAP, so browser encoder bugs
+  ([2090860](https://bugzilla.mozilla.org/show_bug.cgi?id=2090860)) don't
+  matter on this path.
+- One store: passkeys created over USB work through the extension and back.
+  The USB key stays for sudo (`pam_u2f`), ssh and browsers without the
+  extension.
+
+The daemon serves `io.github.koxu1996.LinuxPasskey.Gateway1` on the session
+bus, shaped like [credentialsd](https://github.com/linux-credentials/credentialsd)'s
+Gateway (origin argument, WebAuthn JSON in and out). The flake builds the
+native host manifests into the package (`lib/mozilla/native-messaging-hosts`,
+`etc/chromium/native-messaging-hosts`) and the extension as
+`.#browser-extension` (`chromium/` unpacked, `linux-passkey.xpi` unsigned).
+With home-manager:
+
+```nix
+# Brave / Chromium: load it unpacked (fixed id gjkneikacpbecbbdppkhijklocpamfoi)
+(pkgs.brave.override { commandLineArgs = "--load-extension=${lp.browser-extension}/chromium"; })
+home.file.".config/BraveSoftware/Brave-Browser/NativeMessagingHosts/io.github.koxu1996.linux_passkey.json".source =
+  "${lp.default}/etc/chromium/native-messaging-hosts/io.github.koxu1996.linux_passkey.json";
+
+# LibreWolf / Firefox
+programs.librewolf = {
+  nativeMessagingHosts = [ lp.default ];
+  policies.ExtensionSettings."linux-passkey@koxu1996" = {
+    installation_mode = "force_installed";
+    install_url = "file://${lp.browser-extension}/linux-passkey.xpi";
+  };
+  settings."xpinstall.signatures.required" = false; # unsigned
+};
+```
+
+(`lp = linux-passkey.packages.${system}`.) Not yet: passkey autofill
+(`mediation: "conditional"`), cross-origin iframes (left to the browser),
+`prf`/`largeBlob` extensions on this path.
 
 ## Build and run
 
@@ -261,8 +318,13 @@ registered".
   as your user and talk to `/dev/tpmrm0` and the store, can use the passkeys.
   This is the same trust boundary as `gpg-agent`. There is no separate PIN;
   OS login is the user verification.
-- **Roaming, not platform.** Browsers see a USB security key, which is why
-  Google needs the shim. Hybrid/phone flows are unaffected.
+- **Roaming, unless the extension is used.** Over USB, browsers see a security
+  key, which is why Google needs the shim; with the extension it is a
+  platform authenticator. Hybrid/phone flows are unaffected.
+- **Origin.** The extension takes the origin from the browser, and the daemon
+  checks the rp id against it. Any process running as you could still call
+  the D-Bus API with any origin, as it can already open the hidraw node with
+  any rp id: the dialog (and finger) is what stops it.
 - **Anti-probing kept.** Duplicate detection still requires your confirm
   before telling a site "already registered".
 
@@ -273,6 +335,7 @@ Applied by the flake (`patches/`) on top of OpenSK `af63209`:
 | Patch | Why |
 |---|---|
 | `opensk-cbor-unordered-keys.patch` | Accept CBOR map keys in any order: sort them on read (OpenSK's request parsing expects sorted maps), still reject duplicates. Firefox (authenticator-rs) sends getAssertion options as `{"uv", "up"}` when a site asks for user verification, which upstream answers with `CTAP2_ERR_INVALID_CBOR`, so the prompt closes at once ([bug 2090860](https://bugzilla.mozilla.org/show_bug.cgi?id=2090860)). Hardware keys accept it. Drop once Firefox encodes canonically. |
+| `opensk-process-command.patch` | `Ctap::process_command`: run a CTAP2 command without CTAPHID framing, for the D-Bus front-end. |
 | `opensk-pinuvauthtoken.patch` | Advertise `pinUvAuthToken` only when a clientPIN is set. Browsers then send `uv` inside makeCredential/getAssertion instead of fetching a token first, so the dialog sees the whole request: it names the account and catches an already-registered one before asking (like Windows Hello / Touch ID). |
 | `opensk-pub-storage.patch` | `mod storage` → `pub mod storage`, for duplicate detection and `list`/`delete`. |
 | `opensk-resident-fallback.patch` | Store a non-discoverable credential as discoverable when the wrapped key doesn't fit in the fixed-size credential ID (instead of `VENDOR_INTERNAL_ERROR`). |
@@ -304,8 +367,12 @@ platform still asks for a token, the dialog names the site from its rpId.
 | `src/fprintd.rs` | fingerprint check via `fprintd-verify` (`LINUX_PASSKEY_UV=fprintd`) |
 | `src/request.rs` | CTAPHID reassembly + CBOR peek: dialog wording, duplicate detection |
 | `src/cli.rs` | `list` / `delete` / `unblock` |
+| `src/webauthn.rs` | WebAuthn JSON ↔ CTAP2: origin and rp id checks, clientDataJSON, response JSON (attestation `none`) |
+| `src/gateway.rs` | D-Bus gateway (`Gateway1`): requests queued for the main loop, cancel |
+| `src/native_host.rs` | browser native messaging host ↔ D-Bus |
 | `nix/module.nix` | `services.linux-passkey` |
-| `browser/passkey-platform-shim/` | Google passkey-creation shim (extension) |
+| `browser/linux-passkey-extension/` | the platform-authenticator extension (MV3, Chromium + Firefox) |
+| `browser/passkey-platform-shim/` | Google passkey-creation shim for the USB path (not needed with the extension) |
 
 ## Troubleshooting
 

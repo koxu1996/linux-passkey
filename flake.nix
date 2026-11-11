@@ -73,6 +73,27 @@
           pkgs.openssl # opensk build.rs + pkg-config
         ];
         doCheck = false; # OpenSK's tests aren't meaningful here / need a TPM
+        # The browser extension's native messaging host (same binary, picked by
+        # name), and its manifests: lib/mozilla/... for Firefox/LibreWolf
+        # (home-manager's nativeMessagingHosts), etc/chromium/... for Chromium
+        # and Brave.
+        postInstall = ''
+          ln -s linux-passkey $out/bin/linux-passkey-native-host
+          host() {
+            mkdir -p "$out/$1"
+            cat > "$out/$1/${nativeHostName}.json" <<EOF
+          {
+            "name": "${nativeHostName}",
+            "description": "linux-passkey platform authenticator",
+            "path": "$out/bin/linux-passkey-native-host",
+            "type": "stdio",
+            $2
+          }
+          EOF
+          }
+          host lib/mozilla/native-messaging-hosts '"allowed_extensions": ["${geckoId}"]'
+          host etc/chromium/native-messaging-hosts '"allowed_origins": ["chrome-extension://${chromiumId}/"]'
+        '';
         meta = {
           description = "TPM 2.0-backed FIDO2/CTAP2 authenticator for Linux";
           license = pkgs.lib.licenses.asl20;
@@ -80,6 +101,29 @@
           platforms = pkgs.lib.platforms.linux;
         };
       };
+      # The extension's ids (browser/linux-passkey-extension/manifest.json:
+      # gecko id, and the Chromium id derived from its "key").
+      nativeHostName = "io.github.koxu1996.linux_passkey";
+      geckoId = "linux-passkey@koxu1996";
+      chromiumId = "gjkneikacpbecbbdppkhijklocpamfoi";
+
+      # The browser extension, one manifest per browser (each without the
+      # other's keys): chromium/ (unpacked, for --load-extension) and
+      # linux-passkey.xpi (unsigned, for a Firefox/LibreWolf policy install).
+      browserExtension = pkgs.runCommand "linux-passkey-browser-extension" {
+        nativeBuildInputs = [ pkgs.jq pkgs.zip ];
+      } ''
+        src=${./browser/linux-passkey-extension}
+        mkdir -p $out/chromium firefox
+        cp $src/*.js $out/chromium/
+        cp $src/*.js firefox/
+        jq 'del(.browser_specific_settings) | .background |= del(.scripts)' \
+          $src/manifest.json > $out/chromium/manifest.json
+        jq 'del(.key) | .background |= del(.service_worker)' \
+          $src/manifest.json > firefox/manifest.json
+        (cd firefox && zip -qX -r $out/linux-passkey.xpi .)
+      '';
+
       linux-passkey = mkLinuxPasskey { };
       linuxPasskeyTests = (mkLinuxPasskey { pname = "linux-passkey-tests"; }).overrideAttrs { doCheck = true; };
     in
@@ -87,6 +131,7 @@
       packages = {
         default = linux-passkey;
         linux-passkey = linux-passkey;
+        browser-extension = browserExtension;
         # With OpenSK's internal debug output (run with RUST_LOG=debug).
         debug = mkLinuxPasskey {
           pname = "linux-passkey-debug";
