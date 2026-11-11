@@ -289,6 +289,12 @@ fn make_credential(body: &[u8]) -> Option<Request> {
     let mut map = cbor_map(body)?;
     let mut rp = take_int(&mut map, 0x02)?.extract_map()?;
     let rp = take_text(&mut rp, "id")?;
+    // Browsers pick one of several keys with a dummy registration that only
+    // waits for a touch (and fails): Firefox names its rp make.me.blink,
+    // Chromium .dummy. It creates nothing.
+    if rp == "make.me.blink" || rp == ".dummy" {
+        return Some(Request::Select);
+    }
     let user = take_int(&mut map, 0x03)
         .and_then(|u| u.extract_map())
         .and_then(|mut u| take_text(&mut u, "name").or_else(|| take_text(&mut u, "displayName")));
@@ -438,7 +444,7 @@ impl Prompt {
             ),
             Some(Request::Select) => p(
                 "linux-passkey",
-                "Use this passkey authenticator?".to_string(),
+                "Use this security key? The browser asks which key to use; nothing is created.".to_string(),
                 "Select",
             ),
             Some(Request::U2fRegister) => p(
@@ -510,6 +516,19 @@ mod tests {
         let mut b = vec![cmd];
         sk_cbor::write(v, &mut b).unwrap();
         b
+    }
+
+    #[test]
+    fn key_selection_dummy_is_select() {
+        let _g = SERIAL.lock().unwrap();
+        for rp in ["make.me.blink", ".dummy"] {
+            let req = cbor_req(0x01, cbor_map! { 0x02 => cbor_map! { "id" => rp } });
+            let mut r = Reassembler::default();
+            for p in packets(CTAPHID_CBOR, &req) {
+                r.feed(&p);
+            }
+            assert_eq!(current(), Some(Request::Select), "{rp}");
+        }
     }
 
     #[test]
