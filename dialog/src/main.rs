@@ -283,6 +283,10 @@ fn finger_page(ui_window: &adw::ApplicationWindow, status: &gtk::Label) -> gtk::
     let window = ui_window.clone();
     cancel.connect_clicked(move |_| window.close());
     buttons.append(&cancel);
+    // Same height as the request page (see build): Cancel stays at the bottom.
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_vexpand(true);
+    page.append(&spacer);
     page.append(&buttons);
     page.upcast()
 }
@@ -295,9 +299,11 @@ fn build(app: &adw::Application) {
         .resizable(false)
         .build();
     let stack = gtk::Stack::new();
+    // Both pages the same size: the window never resizes (a resize races the
+    // compositor's own animation and shows stale pixels at the edges).
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-    stack.set_vhomogeneous(false);
-    stack.set_interpolate_size(true);
+    stack.set_hhomogeneous(true);
+    stack.set_vhomogeneous(true);
     let finger_status = gtk::Label::new(Some("Waiting…"));
     let ui = Rc::new(Ui {
         window: window.clone(),
