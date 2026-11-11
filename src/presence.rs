@@ -29,8 +29,8 @@ use std::time::{Duration, Instant};
 /// fingerprint-backed user verification, so every path asks the same way.
 #[derive(Clone)]
 pub struct UserCheck {
-    /// The approval agent (linux-passkey-dialog, `LINUX_PASSKEY_DIALOG`); pinentry without one.
-    pub dialog_bin: Option<String>,
+    /// Approval agents (the bar, linux-passkey-dialog); pinentry without one.
+    pub agents: crate::agent::Agents,
     pub pinentry_bin: String,
     /// `fprintd-verify` binary when fingerprints are on (`LINUX_PASSKEY_UV=fprintd`).
     pub fprintd_verify: Option<String>,
@@ -58,13 +58,13 @@ impl UserCheck {
         if crate::agent::is_preapproved() {
             return crate::agent::preapproved_fingerprint(finger, abort);
         }
-        if let Some(bin) = &self.dialog_bin {
-            match crate::agent::Session::start(bin) {
+        if self.agents.available() {
+            match crate::agent::Session::start(&self.agents) {
                 Ok(session) => {
                     let ask = crate::agent::Ask::for_request(req, finger.is_some());
                     return crate::agent::approve(session, &ask, finger, abort);
                 }
-                Err(e) => tracing::warn!("approval dialog '{bin}' failed to start ({e}); using pinentry"),
+                Err(e) => tracing::warn!("approval dialog failed to start ({e}); using pinentry"),
             }
         }
         self.confirm_pinentry(req, finger, abort)
@@ -113,8 +113,8 @@ pub struct Abort(Arc<Mutex<AbortState>>);
 struct AbortState {
     aborted: bool,
     child: Option<Child>,
-    /// Processes owned elsewhere (the approval dialog), killed on abort too.
-    adopted: Vec<Arc<Mutex<Child>>>,
+    /// Sessions owned elsewhere (the approval dialog), ended on abort too.
+    adopted: Vec<crate::agent::Killer>,
 }
 
 /// The pipes of a process started with [`Abort::spawn`].
@@ -136,18 +136,18 @@ impl Abort {
         if let Some(child) = st.child.as_mut() {
             let _ = child.kill();
         }
-        for child in &st.adopted {
-            let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        for killer in &st.adopted {
+            killer.kill();
         }
     }
 
-    /// Kill `child` too when the request ends.
-    pub fn adopt(&self, child: Arc<Mutex<Child>>) {
+    /// End `killer`'s session too when the request ends.
+    pub fn adopt(&self, killer: crate::agent::Killer) {
         let mut st = self.state();
         if st.aborted {
-            let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+            killer.kill();
         }
-        st.adopted.push(child);
+        st.adopted.push(killer);
     }
 
     pub fn is_aborted(&self) -> bool {

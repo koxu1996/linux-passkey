@@ -74,6 +74,10 @@ browser ──WebAuthn──▶ /dev/hidraw (virtual FIDO HID key, via /dev/uhid
   (`src/agent.rs` has the protocol); it only draws. The default is
   `linux-passkey-dialog` (GTK4 + libadwaita, `dialog/`, `.#dialog`); without
   one (`services.linux-passkey.dialog = null`) pinentry asks instead.
+  A running program can be the agent too, e.g. a desktop shell's bar: it
+  listens on `$XDG_RUNTIME_DIR/linux-passkey-agent.sock`, and the daemon asks
+  it first. Only executables from `services.linux-passkey.agents` count (the
+  daemon checks the socket's peer), since whoever answers can approve.
 - **UV on registration**, so the UV flag is set and sites treat it as a real
   passkey, not a second factor (see [Google](#google)).
 - **Duplicate detection.** When a site already has this authenticator (its

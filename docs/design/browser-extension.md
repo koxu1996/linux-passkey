@@ -324,8 +324,13 @@ from the hook as before. pinentry stays as the fallback.
 The requesting app is looked up by the daemon: the D-Bus caller's pid is the
 native host, its parent the browser, named by its executable. Display only.
 
-A desktop-provided agent registering itself over D-Bus (polkit's
-`RegisterAuthenticationAgent`) would carry the same messages; not built.
+A running agent (a desktop shell, e.g. a Quickshell bar) registers by
+listening on `$XDG_RUNTIME_DIR/linux-passkey-agent.sock`: the daemon connects
+there first, with the same messages, and starts the dialog program only when
+nobody listens. Whoever answers can approve, so the daemon checks the peer
+(`SO_PEERCRED`): same uid, and an executable from an allowed package
+(`LINUX_PASSKEY_AGENTS`, the module's `agents` option). A D-Bus registration
+like polkit's `RegisterAuthenticationAgent` would carry the same messages.
 
 Once this path is the browser default, `opensk-pinuvauthtoken.patch` stops
 mattering to browsers. Keep it for CTAP clients that still want the full

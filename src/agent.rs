@@ -16,6 +16,13 @@
 //! daemon -> agent  {"v":1,"type":"done"}, then EOF: the agent closes
 //! ```
 //!
+//! An agent can also be a running program that listens on
+//! `$XDG_RUNTIME_DIR/linux-passkey-agent.sock` (the Quickshell bar does): the
+//! daemon connects there first, with the same messages, and starts the dialog
+//! program only when nobody listens. Only programs from an allowed package
+//! (`LINUX_PASSKEY_AGENTS`, store paths) count: whoever answers there can
+//! approve requests, so the daemon checks the peer's executable.
+//!
 //! `op` is one of register, already-registered, sign-in, select, reset,
 //! u2f-register, u2f-sign-in, other. `accounts` (sign-in) lists our passkeys
 //! for the site, newest first; empty when we can't list them (USB requests).
@@ -31,8 +38,10 @@ use crate::request::Request;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::io::{self, BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -118,39 +127,147 @@ fn parse_answer(line: &str) -> io::Result<Answer> {
     }
 }
 
+/// Where approval agents come from.
+#[derive(Clone, Default)]
+pub struct Agents {
+    /// The program to start when no agent listens (linux-passkey-dialog).
+    pub dialog: Option<String>,
+    /// Packages (store paths) whose programs may answer on the agent socket.
+    pub allowed: Vec<String>,
+}
+
+impl Agents {
+    /// Is there any agent to ask (otherwise pinentry asks)?
+    pub fn available(&self) -> bool {
+        self.dialog.is_some() || (!self.allowed.is_empty() && socket_path().is_some_and(|p| p.exists()))
+    }
+}
+
+pub fn socket_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").map(|d| PathBuf::from(d).join("linux-passkey-agent.sock"))
+}
+
+/// Ends a session from another thread (kills the dialog, or hangs up on the
+/// listening agent).
+#[derive(Clone)]
+pub struct Killer(Arc<dyn Fn() + Send + Sync>);
+
+impl Killer {
+    pub fn kill(&self) {
+        (self.0)()
+    }
+}
+
+enum End {
+    Child(Arc<Mutex<Child>>),
+    Socket(UnixStream),
+}
+
 /// A running agent. Dropping it ends the dialog.
 pub struct Session {
-    child: Arc<Mutex<Child>>,
-    input: ChildStdin,
-    /// Its answer lines, read on a thread; None once it closed stdout.
+    end: End,
+    input: Box<dyn Write + Send>,
+    /// Its answer lines, read on a thread; None once it closed its side.
     lines: Arc<Mutex<Receiver<Option<String>>>>,
 }
 
+fn read_lines(output: impl Read + Send + 'static) -> Receiver<Option<String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(Some(line)).is_err() {
+                return;
+            }
+        }
+        let _ = tx.send(None);
+    });
+    rx
+}
+
+/// The process on the other end of a Unix socket, and its uid.
+fn peer(stream: &UnixStream) -> Option<(i32, u32)> {
+    use std::os::fd::AsRawFd;
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: SO_PEERCRED fills a ucred of the given length on this socket.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut libc::ucred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    (rc == 0).then_some((cred.pid, cred.uid))
+}
+
 impl Session {
-    pub fn start(bin: &str) -> io::Result<Session> {
+    /// The listening agent if there is an allowed one, else the dialog program.
+    pub fn start(agents: &Agents) -> io::Result<Session> {
+        if let Some(session) = Self::connect(agents) {
+            return Ok(session);
+        }
+        let bin = agents
+            .dialog
+            .as_deref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no approval agent"))?;
         let mut child = Command::new(bin)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()?;
         let input = child.stdin.take().expect("piped stdin");
-        let output = BufReader::new(child.stdout.take().expect("piped stdout"));
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in output.lines() {
-                let Ok(line) = line else { break };
-                if tx.send(Some(line)).is_err() {
-                    return;
-                }
-            }
-            let _ = tx.send(None);
-        });
-        Ok(Session { child: Arc::new(Mutex::new(child)), input, lines: Arc::new(Mutex::new(rx)) })
+        let lines = read_lines(child.stdout.take().expect("piped stdout"));
+        Ok(Session {
+            end: End::Child(Arc::new(Mutex::new(child))),
+            input: Box::new(input),
+            lines: Arc::new(Mutex::new(lines)),
+        })
+    }
+
+    fn connect(agents: &Agents) -> Option<Session> {
+        if agents.allowed.is_empty() {
+            return None;
+        }
+        let path = socket_path()?;
+        let stream = UnixStream::connect(&path).ok()?;
+        let (pid, uid) = peer(&stream)?;
+        // SAFETY: getuid has no preconditions.
+        let ours = uid == unsafe { libc::getuid() };
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        if !ours || !agents.allowed.iter().any(|p| exe.starts_with(p)) {
+            tracing::warn!("ignoring the agent on {}: {} is not an allowed agent", path.display(), exe.display());
+            return None;
+        }
+        let input = stream.try_clone().ok()?;
+        let output = stream.try_clone().ok()?;
+        Some(Session {
+            end: End::Socket(stream),
+            input: Box::new(input),
+            lines: Arc::new(Mutex::new(read_lines(output))),
+        })
     }
 
     /// A handle that ends the dialog from another thread.
-    pub fn killer(&self) -> Arc<Mutex<Child>> {
-        self.child.clone()
+    pub fn killer(&self) -> Killer {
+        match &self.end {
+            End::Child(child) => {
+                let child = child.clone();
+                Killer(Arc::new(move || {
+                    let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+                }))
+            }
+            End::Socket(stream) => {
+                let stream = stream.try_clone().ok();
+                Killer(Arc::new(move || {
+                    if let Some(s) = &stream {
+                        let _ = s.shutdown(std::net::Shutdown::Both);
+                    }
+                }))
+            }
+        }
     }
 
     fn send(&mut self, msg: serde_json::Value) -> io::Result<()> {
@@ -180,7 +297,14 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.send(serde_json::json!({ "v": VERSION, "type": "done" }));
-        let mut child = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        let child = match &self.end {
+            End::Socket(stream) => {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+                return;
+            }
+            End::Child(child) => child,
+        };
+        let mut child = child.lock().unwrap_or_else(|e| e.into_inner());
         // Give it a moment to show the last state and exit by itself.
         let deadline = Instant::now() + Duration::from_millis(600);
         while Instant::now() < deadline {
@@ -192,10 +316,6 @@ impl Drop for Session {
         let _ = child.kill();
         let _ = child.wait();
     }
-}
-
-fn kill(child: &Arc<Mutex<Child>>) {
-    let _ = child.lock().unwrap_or_else(|e| e.into_inner()).kill();
 }
 
 /// Run one approval in `session` for a USB request: the dialog, then the
@@ -299,15 +419,15 @@ pub enum Pre {
 
 /// Ask the user about an extension request before OpenSK runs it. Waits up
 /// to `timeout`, and gives up when `cancelled` says so.
-pub fn preapprove(bin: &str, ask: Ask, timeout: Duration, mut cancelled: impl FnMut() -> bool) -> Pre {
-    let session = match Session::start(bin) {
+pub fn preapprove(agents: &Agents, ask: Ask, timeout: Duration, mut cancelled: impl FnMut() -> bool) -> Pre {
+    let session = match Session::start(agents) {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!("could not start the approval dialog '{bin}': {e}");
+            tracing::error!("could not start the approval dialog: {e}");
             return Pre::Failed;
         }
     };
-    let child = session.killer();
+    let killer = session.killer();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut session = session;
@@ -331,7 +451,7 @@ pub fn preapprove(bin: &str, ask: Ask, timeout: Duration, mut cancelled: impl Fn
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if cancelled() || Instant::now() >= deadline {
-            kill(&child);
+            killer.kill();
             // The reader thread ends once the dialog is gone.
             let _ = rx.recv_timeout(Duration::from_secs(1));
             return Pre::Cancelled;

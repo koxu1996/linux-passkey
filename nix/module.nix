@@ -58,6 +58,18 @@ in
       '';
     };
 
+    agents = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [ ];
+      example = lib.literalExpression "[ pkgs.quickshell ]";
+      description = ''
+        Programs that may answer approvals from their own UI, by listening on
+        `$XDG_RUNTIME_DIR/linux-passkey-agent.sock` (e.g. a Quickshell bar).
+        When one listens, it is asked instead of the dialog. Whoever answers
+        there can approve requests, so only executables from these packages count.
+      '';
+    };
+
     pinentry = lib.mkOption {
       type = lib.types.package;
       default = pkgs.pinentry-qt;
@@ -111,6 +123,8 @@ in
             "LINUX_PASSKEY_PINENTRY=${cfg.pinentry}/bin/${cfg.pinentryProgram}"
             "RUST_LOG=info"
           ] ++ lib.optional (cfg.dialog != null) "LINUX_PASSKEY_DIALOG=${lib.getExe cfg.dialog}"
+            ++ lib.optional (cfg.agents != [ ])
+            "LINUX_PASSKEY_AGENTS=${lib.concatMapStringsSep ":" toString cfg.agents}"
             ++ lib.optional sep "LINUX_PASSKEY_SEP_DEVICE=${cfg.sepDevice}"
             ++ lib.optional (cfg.uv == "fprintd")
             "LINUX_PASSKEY_FPRINTD_VERIFY=${config.services.fprintd.package}/bin/fprintd-verify";

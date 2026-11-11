@@ -57,6 +57,8 @@ ENVIRONMENT:
   LINUX_PASSKEY_DATA_DIR   store dir (default ~/.local/share/linux-passkey)
   LINUX_PASSKEY_TCTI       TPM (default device:/dev/tpmrm0)
   LINUX_PASSKEY_DIALOG     approval dialog (linux-passkey-dialog); pinentry without it
+  LINUX_PASSKEY_AGENTS     store paths (:-separated) of programs allowed to answer on
+                           $XDG_RUNTIME_DIR/linux-passkey-agent.sock (e.g. the bar)
   LINUX_PASSKEY_PINENTRY   pinentry binary for the confirm dialog
   LINUX_PASSKEY_BACKEND    hardware behind the keys: tpm (default) or sep
   LINUX_PASSKEY_SEP_DEVICE Secure Enclave key device (default /dev/sep-key)
@@ -118,8 +120,13 @@ fn main() -> Result<()> {
         "fprintd" => Some(env_var("FPRINTD_VERIFY").unwrap_or_else(|| "fprintd-verify".to_string())),
         other => anyhow::bail!("unknown LINUX_PASSKEY_UV '{other}' (supported: pinentry, fprintd)"),
     };
-    let dialog_bin = env_var("DIALOG").filter(|d| !d.is_empty());
-    let check = presence::UserCheck { dialog_bin, pinentry_bin, fprintd_verify };
+    let agents = agent::Agents {
+        dialog: env_var("DIALOG").filter(|d| !d.is_empty()),
+        allowed: env_var("AGENTS")
+            .map(|a| a.split(':').filter(|p| !p.is_empty()).map(String::from).collect())
+            .unwrap_or_default(),
+    };
+    let check = presence::UserCheck { agents, pinentry_bin, fprintd_verify };
     let tcti = env_var("TCTI").unwrap_or_else(|| "device:/dev/tpmrm0".to_string());
     let data_dir = match env_var("DATA_DIR") {
         Some(dir) => std::path::PathBuf::from(dir),
@@ -302,7 +309,7 @@ fn ceremony(ctap: &mut Ctap<AppEnv>, check: &presence::UserCheck, job: &mut gate
 
     // With the dialog agent, the user answers before OpenSK runs: they can
     // pick the account, and OpenSK's UV is left with the finger only.
-    if let Some(bin) = &check.dialog_bin {
+    if check.agents.available() {
         let existing = matches!(request::current(), Some(request::Request::Register { existing: true, .. }));
         let accounts = if c.kind == Kind::Get { request::accounts(ctap.env(), &c.rp_id, &c.allow) } else { vec![] };
         let ask = agent::Ask {
@@ -324,7 +331,7 @@ fn ceremony(ctap: &mut Ctap<AppEnv>, check: &presence::UserCheck, job: &mut gate
             fingerprint: check.fprintd_verify.is_some() && !existing,
         };
         let cancelled = || crate::uhid::take_cancel(request::INTERNAL_CID);
-        match agent::preapprove(bin, ask, DIALOG_TIMEOUT, cancelled) {
+        match agent::preapprove(&check.agents, ask, DIALOG_TIMEOUT, cancelled) {
             agent::Pre::Approved(account) => {
                 if let Some(id) = account {
                     c.restrict_to(id);

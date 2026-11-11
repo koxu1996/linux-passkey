@@ -21,7 +21,7 @@ fn hex(b: &[u8]) -> String {
 
 fn open(data_dir: PathBuf, writer: bool) -> Result<AppEnv> {
     // No uhid device and no prompts: the Env is only used for its store.
-    let no_prompts = crate::presence::UserCheck { dialog_bin: None, pinentry_bin: String::new(), fprintd_verify: None };
+    let no_prompts = crate::presence::UserCheck { agents: Default::default(), pinentry_bin: String::new(), fprintd_verify: None };
     AppEnv::new(UhidConnection::detached(), no_prompts, data_dir, writer)
 }
 
